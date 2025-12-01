@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import PrinterConfigScreen from './PrinterConfigScreen'
 
 interface SettingsScreenProps {
   navigation?: {
@@ -22,6 +23,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     role: string
   } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showPrinterConfig, setShowPrinterConfig] = useState(false)
 
   useEffect(() => {
     fetchUserData()
@@ -77,6 +79,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
         { icon: 'storefront', title: 'Store Information', subtitle: 'Business details', color: '#f59e0b' },
         { icon: 'pricetag', title: 'Services & Pricing', subtitle: 'Manage laundry services', color: '#10b981', action: 'services' },
         { icon: 'receipt', title: 'Receipt Settings', subtitle: 'Print and email options', color: '#8b5cf6' },
+        { icon: 'print', title: 'Printer Configuration', subtitle: 'Setup and select printer', color: '#8b5cf6', action: 'printer' },
         { icon: 'time', title: 'Business Hours', subtitle: 'Operating schedule', color: '#06b6d4' },
         { icon: 'card', title: 'Payment Methods', subtitle: 'Accept payment types', color: '#ef4444' },
       ]
@@ -120,6 +123,8 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   const handleSettingPress = (item: any) => {
     if (item.action === 'services' && navigation) {
       navigation.navigate('ServicesManagement')
+    } else if (item.action === 'printer') {
+      setShowPrinterConfig(true)
     }
   }
 
@@ -248,6 +253,25 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
         <Text style={styles.versionText}>LaundroPOS v1.0.0</Text>
         <Text style={styles.versionSubtext}>Powered by ArkWare Technologies</Text>
       </View>
+
+      {/* Printer Configuration Modal */}
+      <Modal
+        visible={showPrinterConfig}
+        animationType="slide"
+        onRequestClose={() => setShowPrinterConfig(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity 
+              style={styles.modalCloseButton}
+              onPress={() => setShowPrinterConfig(false)}
+            >
+              <Ionicons name="close" size={24} color="#111827" />
+            </TouchableOpacity>
+          </View>
+          <PrinterConfigScreen />
+        </View>
+      </Modal>
     </ScrollView>
   )
 }
@@ -399,6 +423,23 @@ const styles = StyleSheet.create({
   versionSubtext: {
     fontSize: 12,
     color: '#9ca3af',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#f9fafb',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    padding: 20,
+    paddingTop: 60,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  modalCloseButton: {
+    padding: 8,
   },
 })
 

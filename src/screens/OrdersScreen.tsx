@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator, RefreshControl } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator, RefreshControl, Dimensions } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
+import ThermalPrinterService from '../services/ThermalPrinterService'
+import QRCodeDisplay from '../components/QRCodeDisplay'
 
 interface OrderItem {
   id: string
@@ -61,6 +63,10 @@ export default function OrdersScreen() {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'gcash' | 'paymaya'>('cash')
+  
+  // Print functionality
+  const [printerService] = useState(ThermalPrinterService.getInstance())
+  const [showQRCode, setShowQRCode] = useState(false)
 
   useEffect(() => {
     if (currentStore) {
@@ -260,6 +266,58 @@ export default function OrdersScreen() {
       case 'refunded': return '#6b7280'
       default: return '#9ca3af'
     }
+  }
+
+  // Print functions
+  const printClaimStub = async () => {
+    if (!selectedOrder) return
+
+    try {
+      const orderData = {
+        orderId: selectedOrder.id,
+        orderNumber: selectedOrder.order_number,
+        customerName: selectedOrder.customers ? 
+          `${selectedOrder.customers.first_name} ${selectedOrder.customers.last_name}` : 
+          'Walk-in Customer',
+        orderDate: selectedOrder.order_date,
+        totalAmount: selectedOrder.total_amount,
+        items: selectedOrder.order_items?.map(item => ({
+          name: item.service_name,
+          quantity: item.quantity,
+          price: item.unit_price
+        })) || [],
+        storeInfo: {
+          name: currentStore?.name || 'LaundroPOS',
+          address: currentStore?.address || '',
+          phone: currentStore?.phone || ''
+        }
+      }
+
+      const success = await printerService.printOrderClaimStub(orderData)
+      if (success) {
+        Alert.alert('Success', 'Claim stub printed successfully!')
+      } else {
+        Alert.alert('Error', 'Failed to print claim stub. Please check printer connection.')
+      }
+    } catch (error) {
+      console.error('Print error:', error)
+      Alert.alert('Error', 'Failed to print claim stub')
+    }
+  }
+
+  const generateQRCodeData = () => {
+    if (!selectedOrder) return ''
+    
+    return JSON.stringify({
+      orderId: selectedOrder.id,
+      orderNumber: selectedOrder.order_number,
+      customerName: selectedOrder.customers ? 
+        `${selectedOrder.customers.first_name} ${selectedOrder.customers.last_name}` : 
+        'Walk-in Customer',
+      totalAmount: selectedOrder.total_amount,
+      status: selectedOrder.order_status,
+      date: selectedOrder.order_date
+    })
   }
 
   const formatDate = (dateString: string) => {
@@ -492,6 +550,38 @@ export default function OrdersScreen() {
                       </View>
                     ))}
                   </>
+                )}
+
+                {/* Print and QR Code Buttons */}
+                <View style={styles.printButtons}>
+                  <TouchableOpacity
+                    style={styles.printButton}
+                    onPress={printClaimStub}
+                  >
+                    <Ionicons name="print-outline" size={20} color="#3b82f6" />
+                    <Text style={[styles.printButtonText, { color: '#3b82f6' }]}>Print Claim Stub</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.printButton}
+                    onPress={() => setShowQRCode(!showQRCode)}
+                  >
+                    <Ionicons name="qr-code-outline" size={20} color="#10b981" />
+                    <Text style={[styles.printButtonText, { color: '#10b981' }]}>
+                      {showQRCode ? 'Hide' : 'Show'} QR Code
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* QR Code Display */}
+                {showQRCode && (
+                  <View style={styles.qrCodeContainer}>
+                    <QRCodeDisplay
+                      data={generateQRCodeData()}
+                      orderNumber={selectedOrder.order_number}
+                      size={200}
+                    />
+                  </View>
                 )}
 
                 {/* Action Buttons */}
@@ -802,7 +892,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '90%',
+    maxHeight: Dimensions.get('window').height * 0.9,
+    minHeight: Dimensions.get('window').height * 0.5,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -957,6 +1048,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
+  },
+  printButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  printButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    gap: 8,
+  },
+  printButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  qrCodeContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   balanceInfo: {
     backgroundColor: '#fef3c7',

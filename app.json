@@ -25,13 +25,24 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "extra": {
       "eas": {
-        "projectId": "2a6b5cac-be58-4e32-89b4-2a588f2ab3ba"
+        "projectId": "1343d135-4bd7-46cd-b8f1-77420c15b696"
       }
-    }
+    },
+    "owner": "arkware"
   }
 }

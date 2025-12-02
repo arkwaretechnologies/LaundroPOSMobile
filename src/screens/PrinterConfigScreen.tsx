@@ -12,11 +12,12 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import ThermalPrinterService from '../services/ThermalPrinterService'
+import POSTerminalPrinterService from '../services/POSTerminalPrinterService'
 
 interface AvailablePrinter {
   id: string
   name: string
-  type: 'sunmi' | 'pos-terminal' | 'usb' | 'built-in' | 'simple'
+  type: 'sunmi' | 'pos-terminal' | 'built-in' | 'simple'
   status: 'available' | 'unavailable' | 'testing'
   module?: any
 }
@@ -151,24 +152,7 @@ export default function PrinterConfigScreen() {
         console.log('⚠️ Sunmi check failed:', error)
       }
 
-      // 3. Check for USB Printer
-      try {
-        const { USBPrinter } = NativeModules
-        if (USBPrinter) {
-          foundPrinters.push({
-            id: 'usb',
-            name: 'USB Thermal Printer',
-            type: 'usb',
-            status: 'available',
-            module: USBPrinter
-          })
-          console.log('✅ USB printer available')
-        }
-      } catch (error) {
-        console.log('⚠️ USB check failed:', error)
-      }
-
-      // 4. Check for other printer modules
+      // 3. Check for other printer modules
       const printerModuleNames = [
         'PrinterModule',
         'ThermalPrinter',
@@ -245,11 +229,27 @@ export default function PrinterConfigScreen() {
         }
 
         // Check connection
-        const isConnected = await POSTerminalPrinter.isPrinterConnected()
+        let isConnected = await POSTerminalPrinter.isPrinterConnected()
+        console.log(`🔍 Initial connection status: ${isConnected}`)
+
+        // If not connected, try to connect via AIDL
         if (!isConnected) {
-          Alert.alert('Error', 'Printer service not connected. Please ensure the IPOS printer service is running on your device.')
-          setLoading(false)
-          return
+          console.log('🔌 Attempting to connect to printer service via AIDL...')
+          const connected = await POSTerminalPrinter.connectPrinterService()
+          console.log(`🔌 AIDL connection result: ${connected}`)
+          isConnected = connected
+          
+          if (!isConnected) {
+            Alert.alert(
+              'Connection Failed', 
+              'Could not connect to IPOS printer service via AIDL. Please ensure:\n\n' +
+              '1. The IPOS printer service app is installed\n' +
+              '2. The service is running on your device\n' +
+              '3. Your device has a built-in printer (GZPDA03/POSPDA01)'
+            )
+            setLoading(false)
+            return
+          }
         }
 
         // Get printer status
@@ -346,8 +346,6 @@ export default function PrinterConfigScreen() {
         return 'hardware-chip'
       case 'pos-terminal':
         return 'terminal'
-      case 'usb':
-        return 'usb'
       case 'built-in':
         return 'print'
       default:
@@ -361,8 +359,6 @@ export default function PrinterConfigScreen() {
         return '#10b981'
       case 'pos-terminal':
         return '#3b82f6'
-      case 'usb':
-        return '#f59e0b'
       case 'built-in':
         return '#8b5cf6'
       default:
@@ -398,21 +394,20 @@ export default function PrinterConfigScreen() {
                   if (posModule) {
                     console.log('📋 POSTerminalPrinter methods:', Object.keys(posModule))
                     
-                    // Try SDK detection
-                    if (typeof posModule.detectIPOSPrinter === 'function') {
-                      try {
-                        const result = await posModule.detectIPOSPrinter()
-                        Alert.alert(
-                          'IPOS Printer Detection',
-                          `Found: ${result.found}\n` +
-                          `Service Available: ${result.serviceAvailable}\n` +
-                          `Package: ${result.packageName || 'N/A'}\n` +
-                          `Connected: ${result.isConnected}\n\n` +
-                          `Check console for details`
-                        )
-                      } catch (e) {
-                        Alert.alert('Detection Error', String(e))
-                      }
+                    // Use POSTerminalPrinterService.detectIPOSPrinter() method
+                    try {
+                      const result = await POSTerminalPrinterService.detectIPOSPrinter()
+                      Alert.alert(
+                        'IPOS Printer Detection',
+                        `Found: ${result.found ? '✅ Yes' : '❌ No'}\n` +
+                        `Service Available: ${result.serviceAvailable ? '✅ Yes' : '❌ No'}\n` +
+                        `AIDL Connected: ${result.aidlConnected ? '✅ Yes' : '❌ No'}\n` +
+                        `Package: ${result.packageName || 'N/A'}\n` +
+                        `Action: ${result.action || 'N/A'}\n\n` +
+                        `${result.found ? 'Service is installed!' : 'Service not found. Please install the IPOS printer service app.'}`
+                      )
+                    } catch (e) {
+                      Alert.alert('Detection Error', String(e))
                     }
                   } else {
                     Alert.alert(
@@ -506,7 +501,11 @@ export default function PrinterConfigScreen() {
                       try {
                         const { POSTerminalPrinter } = NativeModules
                         if (POSTerminalPrinter) {
-                          const isConnected = await POSTerminalPrinter.isPrinterConnected()
+                          let isConnected = await POSTerminalPrinter.isPrinterConnected()
+                          if (!isConnected) {
+                            // Try to connect via AIDL
+                            isConnected = await POSTerminalPrinter.connectPrinterService()
+                          }
                           const status = await POSTerminalPrinter.getPrinterStatus()
                           
                           const statusText = {

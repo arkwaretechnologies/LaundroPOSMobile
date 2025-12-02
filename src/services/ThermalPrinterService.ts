@@ -1,6 +1,5 @@
 import { NativeModules, Platform } from 'react-native'
 import SimplePrinterService from './SimplePrinterService'
-import USBPrinterService from './USBPrinterService'
 import POSTerminalPrinterService from './POSTerminalPrinterService'
 import SunmiPrinterService from './SunmiPrinterService'
 
@@ -29,7 +28,7 @@ interface Order {
   orderNumber?: string
 }
 
-type PrinterServiceType = 'pos-terminal' | 'usb' | 'built-in' | 'simple' | 'pda' | 'sunmi' | null
+type PrinterServiceType = 'pos-terminal' | 'built-in' | 'simple' | 'pda' | 'sunmi' | null
 
 /**
  * ThermalPrinterService - Main service for managing thermal printer functionality
@@ -37,7 +36,6 @@ type PrinterServiceType = 'pos-terminal' | 'usb' | 'built-in' | 'simple' | 'pda'
  * This service acts as a facade that coordinates multiple printer services:
  * - Sunmi Printer (for Sunmi/Q-series devices)
  * - POS Terminal Printer (for built-in PDA printers)
- * - USB Printer (for USB thermal printers)
  * - Simple Printer (fallback for built-in printers)
  * - Built-in printer detection
  * 
@@ -49,14 +47,12 @@ class ThermalPrinterService {
   private connectedDevice: PrinterServiceType = null
   private isConnected: boolean = false
   private simplePrinter: SimplePrinterService
-  private usbPrinter: USBPrinterService
   private posTerminalPrinter: typeof POSTerminalPrinterService
   private sunmiPrinter: SunmiPrinterService
 
   private constructor() {
     // Initialize service
     this.simplePrinter = SimplePrinterService.getInstance()
-    this.usbPrinter = USBPrinterService.getInstance()
     this.posTerminalPrinter = POSTerminalPrinterService
     this.sunmiPrinter = SunmiPrinterService.getInstance()
   }
@@ -74,9 +70,8 @@ class ThermalPrinterService {
    * Tries services in this order:
    * 1. Sunmi Printer (Q-series handhelds)
    * 2. POS Terminal Printer (for built-in PDA printers)
-   * 3. USB Printer (for USB thermal printers)
-   * 4. Built-in printer detection
-   * 5. Simple Printer Service (fallback)
+   * 3. Built-in printer detection
+   * 4. Simple Printer Service (fallback)
    * 
    * @returns {Promise<boolean>} True if a printer was successfully initialized, false otherwise
    */
@@ -115,20 +110,6 @@ class ThermalPrinterService {
         }
       } catch (error) {
         console.log('⚠️ POS Terminal printer initialization failed:', error instanceof Error ? error.message : String(error))
-      }
-
-      // Try USB printer service third (for USB thermal printers)
-      console.log('🔌 Trying USB printer service...')
-      try {
-        const usbSuccess = await this.usbPrinter.initializePrinter()
-        if (usbSuccess) {
-          this.isConnected = true
-          this.connectedDevice = 'usb'
-          console.log('✅ USB printer initialized')
-          return true
-        }
-      } catch (error) {
-        console.log('⚠️ USB printer initialization failed:', error instanceof Error ? error.message : String(error))
       }
 
       // Check for built-in printer modules
@@ -420,7 +401,6 @@ class ThermalPrinterService {
       const success = await this.tryPrintWithServices(
         () => this.sunmiPrinter.testPrint(),
         () => this.posTerminalPrinter.testPrint(),
-        () => this.usbPrinter.testPrint(),
         () => this.handleTestPrintByDeviceType(testText)
       )
 
@@ -458,9 +438,6 @@ class ThermalPrinterService {
       case 'pos-terminal':
         return await this.posTerminalPrinter.testPrint()
       
-      case 'usb':
-        return await this.usbPrinter.testPrint()
-      
       default:
         // Fallback to built-in printer method
         return await this.printToBuiltInPrinter(testText)
@@ -494,7 +471,6 @@ class ThermalPrinterService {
       const success = await this.tryPrintWithServices(
         () => this.sunmiPrinter.printOrderClaimStub(order),
         () => this.posTerminalPrinter.printOrderClaimStub(order),
-        () => this.usbPrinter.printOrderClaimStub(order),
         () => this.handleClaimStubPrintByDeviceType(order)
       )
 
@@ -532,9 +508,6 @@ class ThermalPrinterService {
       case 'pos-terminal':
         return await this.posTerminalPrinter.printOrderClaimStub(order)
       
-      case 'usb':
-        return await this.usbPrinter.printOrderClaimStub(order)
-      
       default:
         // Fallback to built-in printer method
         return await this.printClaimStubToBuiltInPrinter(order)
@@ -549,7 +522,7 @@ class ThermalPrinterService {
    * @returns {Promise<boolean>} True if any print method succeeded
    */
   private async tryPrintWithServices(...printMethods: Array<() => Promise<boolean>>): Promise<boolean> {
-    const serviceNames = ['Sunmi', 'POS Terminal', 'USB', 'Built-in/Simple']
+    const serviceNames = ['Sunmi', 'POS Terminal', 'Built-in/Simple']
     
     for (let i = 0; i < printMethods.length; i++) {
       try {

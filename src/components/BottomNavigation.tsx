@@ -1,6 +1,7 @@
 import React from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useStore } from '../context/StoreContext'
 import { isFeatureEnabled } from '../utils/featureFlags'
 
@@ -26,6 +27,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({
   settingsBadge = 0
 }) => {
   const { currentStore } = useStore()
+  const insets = useSafeAreaInsets()
   
   // Debug logging
   console.log('🔍 BottomNavigation - Current Store:', currentStore?.name)
@@ -94,7 +96,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { bottom: insets.bottom }]}>
       {tabs.map((tab) => (
         <TouchableOpacity
           key={tab.id}
@@ -126,12 +128,15 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({
 
 const styles = StyleSheet.create({
   container: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     backgroundColor: '#ffffff',
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
-    paddingBottom: 8,
     paddingTop: 8,
+    paddingBottom: 8,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
@@ -139,7 +144,8 @@ const styles = StyleSheet.create({
     },
     shadowOpacity: 0.1,
     shadowRadius: 3,
-    elevation: 5,
+    elevation: 10,
+    zIndex: 1000,
   },
   tab: {
     flex: 1,

@@ -7,9 +7,11 @@ import {
   Alert,
   ActivityIndicator,
   TouchableOpacity,
+  ScrollView,
 } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
-import { StoreProvider } from '../context/StoreContext'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useStore } from '../context/StoreContext'
 import { supabase } from '../../lib/supabase'
 
 interface Store {
@@ -25,11 +27,21 @@ interface StoreSelectionScreenProps {
 const StoreSelectionScreen: React.FC<StoreSelectionScreenProps> = ({
   onStoreSelectionComplete,
 }) => {
+  const insets = useSafeAreaInsets()
+  const { setStoreById } = useStore()
   const [userId, setUserId] = useState<string | null>(null)
   const [userRole, setUserRole] = useState<string>('')
   const [availableStores, setAvailableStores] = useState<Store[]>([])
   const [selectedStoreId, setSelectedStoreId] = useState<string>('')
   const [loading, setLoading] = useState(true)
+  const [storeData, setStoreData] = useState<{
+    totalOrders: number
+    totalCustomers: number
+    todaySales: number
+    todayOrders: number
+    activeOrders: number
+    loading: boolean
+  } | null>(null)
 
   useEffect(() => {
     loadUserData()
@@ -115,6 +127,7 @@ const StoreSelectionScreen: React.FC<StoreSelectionScreenProps> = ({
       // Auto-select first store if only one available
       if (stores.length === 1) {
         setSelectedStoreId(stores[0].id)
+        loadStoreData(stores[0].id)
       }
     } catch (error) {
       console.error('❌ Error loading stores:', error)
@@ -122,12 +135,120 @@ const StoreSelectionScreen: React.FC<StoreSelectionScreenProps> = ({
     }
   }
 
-  const handleContinue = () => {
+  const loadStoreData = async (storeId: string) => {
+    try {
+      setStoreData({
+        totalOrders: 0,
+        totalCustomers: 0,
+        todaySales: 0,
+        todayOrders: 0,
+        activeOrders: 0,
+        loading: true
+      })
+
+      console.log('📊 Loading data for store:', storeId)
+
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const endOfDay = new Date()
+      endOfDay.setHours(23, 59, 59, 999)
+
+      // Fetch total orders for this store (always load, even if zero)
+      const { count: totalOrdersCount, error: ordersCountError } = await supabase
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .eq('store_id', storeId)
+
+      if (ordersCountError) {
+        console.error('Error loading orders count:', ordersCountError)
+        // Continue with 0 if error
+      }
+
+      // Fetch today's orders (always load, even if zero)
+      const { data: todayOrdersData, error: todayOrdersError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('store_id', storeId)
+        .gte('order_date', today.toISOString())
+        .lte('order_date', endOfDay.toISOString())
+
+      if (todayOrdersError) {
+        console.error('Error loading today\'s orders:', todayOrdersError)
+        // Continue with empty array if error
+      }
+
+      // Calculate today's sales (handle null/undefined gracefully)
+      const todaySales = (todayOrdersData || [])?.reduce((sum, order) => sum + Number(order?.paid_amount || 0), 0) || 0
+      const todayOrders = (todayOrdersData || []).length || 0
+      const activeOrders = (todayOrdersData || []).filter(o => 
+        o && o.order_status && o.order_status !== 'completed' && o.order_status !== 'cancelled'
+      ).length || 0
+
+      // Fetch total customers for this store (always load, even if zero)
+      const { count: customersCount, error: customersError } = await supabase
+        .from('customers')
+        .select('*', { count: 'exact', head: true })
+        .eq('store_id', storeId)
+        .eq('is_active', true)
+
+      if (customersError) {
+        console.error('Error loading customers count:', customersError)
+        // Continue with 0 if error
+      }
+
+      const finalTotalOrders = totalOrdersCount ?? 0
+      const finalCustomers = customersCount ?? 0
+      
+      console.log(`✅ Store data loaded: ${finalTotalOrders} orders, ${finalCustomers} customers (including zero counts)`)
+
+      // Always set data even if all values are zero (no data scenario)
+      setStoreData({
+        totalOrders: finalTotalOrders,
+        totalCustomers: finalCustomers,
+        todaySales,
+        todayOrders,
+        activeOrders,
+        loading: false
+      })
+      
+      console.log(`✅ Store data display ready - Orders: ${finalTotalOrders}, Customers: ${finalCustomers}, Today Sales: ₱${todaySales.toFixed(2)}`)
+    } catch (error: any) {
+      console.error('❌ Error loading store data, showing zeros:', error)
+      // Even on error, show zeros so user knows data was attempted to load
+      setStoreData({
+        totalOrders: 0,
+        totalCustomers: 0,
+        todaySales: 0,
+        todayOrders: 0,
+        activeOrders: 0,
+        loading: false
+      })
+    }
+  }
+
+  const handleContinue = async () => {
     if (!selectedStoreId) {
       Alert.alert('Error', 'Please select a store to continue')
       return
     }
-    onStoreSelectionComplete([selectedStoreId])
+    
+    try {
+      console.log('🔄 Setting selected store in context:', selectedStoreId)
+      
+      // Set the store in context using the new method (it will fetch if needed)
+      await setStoreById(selectedStoreId)
+      
+      console.log('✅ Store set in context, proceeding to dashboard')
+      
+      // Small delay to ensure store state is fully updated
+      await new Promise(resolve => setTimeout(resolve, 200))
+      
+      // Now proceed with store selection complete
+      onStoreSelectionComplete([selectedStoreId])
+    } catch (error: any) {
+      console.error('❌ Error setting store:', error)
+      Alert.alert('Error', `Failed to set store: ${error.message || 'Unknown error'}`)
+    }
   }
 
   if (loading) {
@@ -155,7 +276,14 @@ const StoreSelectionScreen: React.FC<StoreSelectionScreenProps> = ({
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: Math.max(insets.bottom, 20) }
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         <Text style={styles.title}>Select Store</Text>
         <Text style={styles.subtitle}>Choose which store to work with</Text>
 
@@ -171,7 +299,10 @@ const StoreSelectionScreen: React.FC<StoreSelectionScreenProps> = ({
                       styles.dropdownItem,
                       selectedStoreId === store.id && styles.selectedItem
                     ]}
-                    onPress={() => setSelectedStoreId(store.id)}
+                    onPress={() => {
+                      setSelectedStoreId(store.id)
+                      loadStoreData(store.id)
+                    }}
                   >
                     <Text style={[
                       styles.storeName,
@@ -192,6 +323,44 @@ const StoreSelectionScreen: React.FC<StoreSelectionScreenProps> = ({
               </View>
             </View>
 
+            {/* Store Statistics Preview - Always show when store is selected */}
+            {selectedStoreId && (
+              <View style={styles.storePreviewContainer}>
+                {!storeData || storeData.loading ? (
+                  <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="small" color="#2089dc" />
+                    <Text style={styles.loadingPreviewText}>Loading store data...</Text>
+                  </View>
+                ) : (
+                  <>
+                    <Text style={styles.previewTitle}>Store Overview</Text>
+                    <View style={styles.statsGrid}>
+                      <View style={styles.statCard}>
+                        <Text style={styles.statValue}>{storeData.totalOrders || 0}</Text>
+                        <Text style={styles.statLabel}>Total Orders</Text>
+                      </View>
+                      <View style={styles.statCard}>
+                        <Text style={styles.statValue}>{storeData.totalCustomers || 0}</Text>
+                        <Text style={styles.statLabel}>Customers</Text>
+                      </View>
+                      <View style={styles.statCard}>
+                        <Text style={styles.statValue}>₱{(storeData.todaySales || 0).toFixed(2)}</Text>
+                        <Text style={styles.statLabel}>Today's Sales</Text>
+                      </View>
+                      <View style={styles.statCard}>
+                        <Text style={styles.statValue}>{storeData.todayOrders || 0}</Text>
+                        <Text style={styles.statLabel}>Today's Orders</Text>
+                      </View>
+                      <View style={styles.statCard}>
+                        <Text style={styles.statValue}>{storeData.activeOrders || 0}</Text>
+                        <Text style={styles.statLabel}>Active Orders</Text>
+                      </View>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+
             <TouchableOpacity
               style={[styles.continueButton, !selectedStoreId && styles.disabledButton]}
               onPress={handleContinue}
@@ -206,7 +375,7 @@ const StoreSelectionScreen: React.FC<StoreSelectionScreenProps> = ({
             <Text style={styles.noStoresSubtext}>Please contact your administrator</Text>
           </View>
         )}
-      </View>
+      </ScrollView>
       <StatusBar style="dark" />
     </SafeAreaView>
   )
@@ -217,9 +386,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-  content: {
+  scrollView: {
     flex: 1,
+  },
+  content: {
     padding: 20,
+    paddingTop: 20,
+    minHeight: '100%',
     justifyContent: 'center',
   },
   centerContainer: {
@@ -327,6 +500,60 @@ const styles = StyleSheet.create({
   errorText: {
     fontSize: 16,
     color: '#e74c3c',
+    textAlign: 'center',
+  },
+  storePreviewContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#e3f2fd',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+  },
+  loadingPreviewText: {
+    marginLeft: 10,
+    fontSize: 14,
+    color: '#666',
+  },
+  previewTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 12,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  statCard: {
+    width: '48%',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2089dc',
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#666',
     textAlign: 'center',
   },
 })

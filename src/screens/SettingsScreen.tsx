@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Mo
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { useStore } from '../context/StoreContext'
 import PrinterConfigScreen from './PrinterConfigScreen'
 
 interface SettingsScreenProps {
@@ -13,9 +14,11 @@ interface SettingsScreenProps {
 }
 
 const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
+  const { currentStore, availableStores, switchStore } = useStore()
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(false)
   const [showServicesModal, setShowServicesModal] = useState(false)
+  const [showStoreSwitchModal, setShowStoreSwitchModal] = useState(false)
   const [userData, setUserData] = useState<{
     firstName: string
     lastName: string
@@ -76,6 +79,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     {
       title: 'Store Settings',
       items: [
+        { icon: 'swap-horizontal', title: 'Switch Store', subtitle: currentStore?.name || 'Select a store', color: '#3b82f6', action: 'switchStore' },
         { icon: 'storefront', title: 'Store Information', subtitle: 'Business details', color: '#f59e0b' },
         { icon: 'pricetag', title: 'Services & Pricing', subtitle: 'Manage laundry services', color: '#10b981', action: 'services' },
         { icon: 'receipt', title: 'Receipt Settings', subtitle: 'Print and email options', color: '#8b5cf6' },
@@ -125,7 +129,19 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
       navigation.navigate('ServicesManagement')
     } else if (item.action === 'printer') {
       setShowPrinterConfig(true)
+    } else if (item.action === 'switchStore') {
+      if (availableStores.length <= 1) {
+        Alert.alert('Info', 'You only have access to one store.')
+        return
+      }
+      setShowStoreSwitchModal(true)
     }
+  }
+
+  const handleStoreSwitch = (storeId: string) => {
+    switchStore(storeId)
+    setShowStoreSwitchModal(false)
+    Alert.alert('Success', 'Store switched successfully')
   }
 
   const handleSignOut = async () => {
@@ -270,6 +286,70 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
             </TouchableOpacity>
           </View>
           <PrinterConfigScreen />
+        </View>
+      </Modal>
+
+      {/* Switch Store Modal */}
+      <Modal
+        visible={showStoreSwitchModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowStoreSwitchModal(false)}
+      >
+        <View style={styles.storeModalOverlay}>
+          <View style={styles.storeModalContent}>
+            <View style={styles.storeModalHeader}>
+              <Text style={styles.storeModalTitle}>Switch Store</Text>
+              <TouchableOpacity
+                style={styles.storeModalCloseButton}
+                onPress={() => setShowStoreSwitchModal(false)}
+              >
+                <Ionicons name="close" size={24} color="#111827" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.storeModalList}>
+              {availableStores.map(store => (
+                <TouchableOpacity
+                  key={store.id}
+                  style={[
+                    styles.storeModalItem,
+                    currentStore?.id === store.id && styles.storeModalSelectedItem
+                  ]}
+                  onPress={() => handleStoreSwitch(store.id)}
+                >
+                  <View style={styles.storeModalItemLeft}>
+                    <View style={[styles.storeModalIcon, { backgroundColor: `${currentStore?.id === store.id ? '#3b82f6' : '#e5e7eb'}20` }]}>
+                      <Ionicons 
+                        name="storefront" 
+                        size={24} 
+                        color={currentStore?.id === store.id ? '#3b82f6' : '#6b7280'} 
+                      />
+                    </View>
+                    <View style={styles.storeModalItemContent}>
+                      <Text style={[
+                        styles.storeModalItemName,
+                        currentStore?.id === store.id && styles.storeModalSelectedText
+                      ]}>
+                        {store.name}
+                      </Text>
+                      {store.address && (
+                        <Text style={[
+                          styles.storeModalItemAddress,
+                          currentStore?.id === store.id && styles.storeModalSelectedSubtext
+                        ]}>
+                          {store.address}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                  {currentStore?.id === store.id && (
+                    <Ionicons name="checkmark-circle" size={24} color="#3b82f6" />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
         </View>
       </Modal>
     </ScrollView>
@@ -440,6 +520,86 @@ const styles = StyleSheet.create({
   },
   modalCloseButton: {
     padding: 8,
+  },
+  storeModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  storeModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    width: '90%',
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  storeModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  storeModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#111827',
+  },
+  storeModalCloseButton: {
+    padding: 8,
+  },
+  storeModalList: {
+    maxHeight: 400,
+  },
+  storeModalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  storeModalSelectedItem: {
+    backgroundColor: '#eff6ff',
+  },
+  storeModalItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  storeModalIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  storeModalItemContent: {
+    flex: 1,
+  },
+  storeModalItemName: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  storeModalItemAddress: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  storeModalSelectedText: {
+    color: '#3b82f6',
+    fontWeight: '600',
+  },
+  storeModalSelectedSubtext: {
+    color: '#60a5fa',
   },
 })
 

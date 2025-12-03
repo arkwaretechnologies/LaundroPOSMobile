@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { View, Text, ActivityIndicator, StyleSheet, SafeAreaView, TouchableOpacity } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
-import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import LoginScreen from './src/screens/LoginScreen'
 import StoreSelectionScreen from './src/screens/StoreSelectionScreen'
 import DashboardScreen from './src/screens/DashboardScreen'
@@ -13,6 +13,7 @@ import ServicesManagementScreen from './src/screens/ServicesManagementScreen'
 import InventoryScreen from './src/screens/InventoryScreen'
 import BottomNavigation from './src/components/BottomNavigation'
 import { StoreProvider, useStore } from './src/context/StoreContext'
+import { NotificationProvider, useNotifications } from './src/context/NotificationContext'
 import { supabase } from './lib/supabase'
 import { isFeatureEnabled } from './src/utils/featureFlags'
 
@@ -22,8 +23,6 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [ordersBadge, setOrdersBadge] = useState(3)
-  const [settingsBadge, setSettingsBadge] = useState(1)
   const [currentScreen, setCurrentScreen] = useState<string | null>(null)
 
   useEffect(() => {
@@ -174,6 +173,47 @@ export default function App() {
     goBack: () => setCurrentScreen(null),
   }
 
+  // Inner component to access safe area insets and notification badges
+  const MainAppContent: React.FC<{
+    currentScreen: string | null
+    activeTab: string
+    setActiveTab: (tab: string) => void
+    renderCurrentScreen: () => React.ReactNode
+  }> = ({
+    currentScreen,
+    activeTab,
+    setActiveTab,
+    renderCurrentScreen
+  }) => {
+    const insets = useSafeAreaInsets()
+    const { ordersBadge, settingsBadge } = useNotifications()
+    
+    // Navigation bar height: ~64px (padding + icon + label) + safe area bottom
+    // BottomNavigation is absolutely positioned at bottom: insets.bottom, so we need to account for
+    // its full height (64px) plus the bottom inset to prevent content overlap
+    const navigationHeight = 64 + insets.bottom
+    
+    return (
+      <>
+        <SafeAreaView style={styles.container}>
+          <View style={[styles.screenContainer, { paddingBottom: currentScreen ? 0 : navigationHeight }]}>
+            {renderCurrentScreen()}
+          </View>
+          {/* Hide bottom navigation when on detail screens */}
+          {!currentScreen && (
+            <BottomNavigation
+              activeTab={activeTab}
+              onTabPress={setActiveTab}
+              ordersBadge={ordersBadge}
+              settingsBadge={settingsBadge}
+            />
+          )}
+        </SafeAreaView>
+        <StatusBar style="light" />
+      </>
+    )
+  }
+
   const renderCurrentScreen = () => {
     // If a specific screen is set, render that screen
     if (currentScreen === 'ServicesManagement') {
@@ -202,30 +242,23 @@ export default function App() {
   return (
     <SafeAreaProvider>
       {isAuthenticated ? (
-        needsStoreSelection ? (
-          <>
-            <StoreSelectionScreen onStoreSelectionComplete={handleStoreSelectionComplete} />
-            <StatusBar style="dark" />
-          </>
-        ) : (
-          <StoreProvider>
-            <SafeAreaView style={styles.container}>
-              <View style={styles.screenContainer}>
-                {renderCurrentScreen()}
-              </View>
-              {/* Hide bottom navigation when on detail screens */}
-              {!currentScreen && (
-                <BottomNavigation
-                  activeTab={activeTab}
-                  onTabPress={setActiveTab}
-                  ordersBadge={ordersBadge}
-                  settingsBadge={settingsBadge}
-                />
-              )}
-            </SafeAreaView>
-            <StatusBar style="light" />
-          </StoreProvider>
-        )
+        <StoreProvider>
+          <NotificationProvider>
+            {needsStoreSelection ? (
+              <>
+                <StoreSelectionScreen onStoreSelectionComplete={handleStoreSelectionComplete} />
+                <StatusBar style="dark" />
+              </>
+            ) : (
+              <MainAppContent
+                currentScreen={currentScreen}
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                renderCurrentScreen={renderCurrentScreen}
+              />
+            )}
+          </NotificationProvider>
+        </StoreProvider>
       ) : (
         <>
           <LoginScreen onLoginSuccess={handleLoginSuccess} />

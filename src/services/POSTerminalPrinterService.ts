@@ -1,4 +1,5 @@
 import { NativeModules, Platform } from 'react-native'
+import { supabase } from '../../lib/supabase'
 
 interface Order {
   orderId: string
@@ -13,7 +14,15 @@ interface Order {
   totalAmount: number
   storeInfo?: {
     name: string
+    address?: string
+    phone?: string
   }
+}
+
+interface Store {
+  id: string
+  name: string
+  address?: string
 }
 
 class POSTerminalPrinterService {
@@ -155,26 +164,232 @@ Test completed successfully!
 
   async printOrderClaimStub(order: Order): Promise<boolean> {
     try {
-      if (!this.isConnected || !this.isInitialized) {
-        console.log('❌ Printer not connected or initialized')
+      // Always initialize printer before printing to ensure clean state
+      console.log('🔌 Ensuring printer is initialized before printing...')
+      const initialized = await this.initializePrinter()
+      if (!initialized) {
+        console.log('❌ Failed to initialize printer for claim ticket')
         return false
       }
 
-      console.log('🖨️ Printing claim stub via POS Terminal printer...')
+      console.log('🖨️ Printing claim ticket via POS Terminal printer...')
       
       const { POSTerminalPrinter } = NativeModules
+      
+      // Verify connection one more time
+      const isConnected = await POSTerminalPrinter.isPrinterConnected()
+      if (!isConnected) {
+        console.log('❌ Printer not connected after initialization')
+        return false
+      }
+      
+      // Wait a moment after initialization for printer to be ready
+      console.log('⏳ Waiting for printer to be ready after initialization...')
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      // Check printer status before starting
+      let initialStatus = await this.getPrinterStatus()
+      console.log(`📊 Initial printer status: ${initialStatus}`)
+      
+      // Wait for printer to be in normal state
+      let statusRetries = 0
+      while (initialStatus !== 0 && statusRetries < 5) {
+        console.log(`⏳ Waiting for printer to be ready (status: ${initialStatus}, attempt ${statusRetries + 1})...`)
+        await new Promise(resolve => setTimeout(resolve, 500))
+        initialStatus = await this.getPrinterStatus()
+        statusRetries++
+      }
+      
+      if (initialStatus !== 0) {
+        console.log(`⚠️ Printer not in normal state after initialization (status: ${initialStatus}), but will attempt to print`)
+      } else {
+        console.log('✅ Printer is in normal state, ready to buffer content')
+      }
+      
+      // Fetch selected store information
+      console.log('🏪 Fetching selected store information...')
+      const selectedStore = await this.fetchSelectedStore()
+      if (selectedStore) {
+        console.log(`✅ Selected store fetched: ${selectedStore.name}`)
+        // Merge store info with order data
+        order.storeInfo = {
+          name: selectedStore.name,
+          address: selectedStore.address,
+          ...order.storeInfo // Allow order.storeInfo to override if present
+        }
+      } else {
+        console.log('⚠️ Could not fetch selected store, using order.storeInfo if available')
+      }
+      
       const claimStubText = this.generateClaimStubText(order)
 
-      const success = await POSTerminalPrinter.printReceipt(claimStubText)
-      if (success) {
-        console.log('✅ Claim stub printed successfully via POS Terminal printer')
-        return true
-      } else {
-        console.log('❌ Claim stub print failed via POS Terminal printer')
+      try {
+        // Step 1: Ensure printer is in normal state before buffering text
+        let textStatus = await this.getPrinterStatus()
+        if (textStatus !== 0) {
+          console.log(`⚠️ Printer status before text: ${textStatus}, waiting...`)
+          await new Promise(resolve => setTimeout(resolve, 500))
+          textStatus = await this.getPrinterStatus()
+        }
+        
+        // Step 1: Print the text part (buffers, doesn't execute yet)
+        console.log('📝 Buffering claim ticket text...')
+        try {
+          const textSuccess = await POSTerminalPrinter.printText(claimStubText)
+          if (!textSuccess) {
+            console.log('❌ Claim ticket text buffer failed - printText returned false')
+            return false
+          }
+          console.log('✅ Text buffered successfully')
+        } catch (textError: any) {
+          console.error('❌ Text buffer error:', textError)
+          if (textError?.message?.includes('PRINTER_NOT_READY') || textError?.code === 'PRINTER_NOT_READY') {
+            console.error('❌ Printer not ready for text printing')
+            return false
+          }
+          throw textError
+        }
+        await new Promise(resolve => setTimeout(resolve, 200)) // Delay after text
+
+        // Step 2: Add spacing before QR code (buffers)
+        console.log('📄 Adding spacing before QR code...')
+        await POSTerminalPrinter.printerFeedLines(2)
+        await new Promise(resolve => setTimeout(resolve, 100)) // Small delay
+
+        // Step 3: Center align for QR code
+        console.log('🎯 Setting alignment for QR code...')
+        await this.setPrinterPrintAlignment(1) // 1 = center
+        await new Promise(resolve => setTimeout(resolve, 100)) // Small delay
+
+        // Step 4: Print QR code with order information (buffers)
+        console.log('📱 Buffering QR code...')
+        const qrCodeData = this.generateQRCodeData(order)
+        
+        try {
+          // Use slightly smaller QR code size (14) to avoid printing issues
+          const qrSuccess = await this.printQRCode(qrCodeData, 14, 1) // modulesize=14, errorCorrectionLevel=M
+          if (!qrSuccess) {
+            console.log('⚠️ QR code buffer failed, but continuing with text only')
+          } else {
+            console.log('✅ QR code buffered successfully')
+          }
+        } catch (qrError) {
+          console.error('⚠️ QR code error (continuing anyway):', qrError)
+          // Continue even if QR code fails
+        }
+        await new Promise(resolve => setTimeout(resolve, 200)) // Delay after QR code
+        
+        // Step 5: Reset alignment to left after QR code
+        await this.setPrinterPrintAlignment(0) // 0 = left
+        await new Promise(resolve => setTimeout(resolve, 100)) // Small delay
+
+        // Step 6: Add extra spacing after QR code for manual tearing (printer has no cutter)
+        console.log('📄 Adding extra spacing after QR code for manual tear...')
+        await POSTerminalPrinter.printerFeedLines(40)
+        await new Promise(resolve => setTimeout(resolve, 200)) // Delay after feed lines
+
+        // Step 7: Wait a moment for all operations to complete
+        console.log('⏳ Waiting for all buffered operations to complete...')
+        await new Promise(resolve => setTimeout(resolve, 500)) // Wait 500ms
+
+        // Step 8: Check printer status and ensure it's ready (must be PRINTER_NORMAL = 0)
+        let status = -1
+        let retries = 0
+        const maxRetries = 10
+        
+        while (retries < maxRetries) {
+          try {
+            status = await this.getPrinterStatus()
+            console.log(`📊 Printer status check (attempt ${retries + 1}/${maxRetries}): ${status}`)
+            
+            if (status === 0) { // PRINTER_NORMAL - ready to print
+              console.log('✅ Printer is in NORMAL state, ready for execution')
+              break
+            } else if (status === 1) { // PRINTER_IS_BUSY
+              console.log('⏳ Printer is busy, waiting 1 second...')
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              retries++
+            } else {
+              console.warn(`⚠️ Printer status: ${status} (0=Normal, 1=Busy, 2=PaperOut, 3=Error)`)
+              if (status === 2) {
+                console.error('❌ Printer has no paper!')
+                return false
+              } else if (status === 3) {
+                console.error('❌ Printer has an error!')
+                return false
+              }
+              // For other statuses, wait and retry
+              await new Promise(resolve => setTimeout(resolve, 500))
+              retries++
+            }
+          } catch (statusError) {
+            console.warn('⚠️ Could not check printer status:', statusError)
+            retries++
+            await new Promise(resolve => setTimeout(resolve, 500))
+          }
+        }
+
+        // Only proceed if printer is in normal state
+        if (status !== 0) {
+          console.error(`❌ Printer not in normal state after ${maxRetries} attempts. Status: ${status}`)
+          console.error('❌ Cannot execute print - printer is not ready')
+          return false
+        }
+
+        // Step 9: Execute all buffered content with extra feed for manual tearing
+        console.log('🖨️ Executing all buffered content and feeding paper for manual tear...')
+        console.log(`📊 Printer status confirmed: ${status} (PRINTER_NORMAL)`)
+        
+        // Double-check status right before execution
+        const finalStatusCheck = await this.getPrinterStatus()
+        console.log(`📊 Final status check before printerPerformPrint: ${finalStatusCheck}`)
+        
+        if (finalStatusCheck !== 0) {
+          console.error(`❌ Printer status is not normal (${finalStatusCheck}) - cannot execute print`)
+          return false
+        }
+        
+        // printerPerformPrint executes all buffered content and feeds additional lines
+        // Feed 50 more lines to push paper out for easy manual tearing (printer has no cutter)
+        console.log('🖨️ Calling printerPerformPrint(50)...')
+        let printSuccess = false
+        try {
+          printSuccess = await POSTerminalPrinter.printerPerformPrint(50)
+          console.log(`📊 printerPerformPrint returned: ${printSuccess}`)
+        } catch (printError: any) {
+          console.error('❌ printerPerformPrint threw error:', printError)
+          console.error('Error details:', printError?.message || printError)
+          return false
+        }
+        
+        // Wait a moment after execution to ensure print completes
+        console.log('⏳ Waiting for print to complete...')
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        // Check status after execution
+        const postPrintStatus = await this.getPrinterStatus()
+        console.log(`📊 Printer status after execution: ${postPrintStatus}`)
+        
+        if (printSuccess) {
+          console.log('✅ Claim ticket printed successfully via POS Terminal printer')
+          return true
+        } else {
+          console.log('❌ Claim ticket print execution failed - printerPerformPrint returned false')
+          console.log('⚠️ Printer may have clicked but did not print - check printer status and buffer')
+          return false
+        }
+      } catch (error) {
+        console.error('❌ Error during claim ticket printing:', error)
+        // Try to execute whatever was buffered and feed paper for manual tear
+        try {
+          await POSTerminalPrinter.printerPerformPrint(50)
+        } catch (feedError) {
+          console.error('❌ Failed to execute print after error:', feedError)
+        }
         return false
       }
     } catch (error) {
-      console.error('Print order claim stub failed:', error)
+      console.error('Print order claim ticket failed:', error)
       return false
     }
   }
@@ -437,6 +652,37 @@ Test completed successfully!
       }
     } catch (error) {
       console.error('Print barcode failed:', error)
+      return false
+    }
+  }
+
+  /**
+   * Print QR code
+   * @param data QR code data string
+   * @param modulesize QR code block size (1-16, default 10, unit: 24 pixels)
+   * @param errorCorrectionLevel Error correction level (0=L, 1=M, 2=Q, 3=H)
+   */
+  async printQRCode(data: string, modulesize: number = 10, errorCorrectionLevel: number = 1): Promise<boolean> {
+    try {
+      if (!this.isConnected || !this.isInitialized) {
+        console.log('❌ Printer not connected or initialized')
+        return false
+      }
+
+      console.log(`📱 Printing QR code: ${data.substring(0, 50)}...`)
+      
+      const { POSTerminalPrinter } = NativeModules
+      const success = await POSTerminalPrinter.printQRCode(data, modulesize, errorCorrectionLevel)
+      
+      if (success) {
+        console.log('✅ QR code printed successfully')
+        return true
+      } else {
+        console.log('❌ QR code print failed')
+        return false
+      }
+    } catch (error) {
+      console.error('Print QR code failed:', error)
       return false
     }
   }
@@ -728,6 +974,93 @@ Test completed successfully!
     }
   }
 
+  /**
+   * Fetch the currently selected store for the logged-in user
+   * Tries to get primary store first, otherwise gets first assigned store
+   */
+  private async fetchSelectedStore(): Promise<Store | null> {
+    try {
+      // Get current user
+      const { data: { user }, error: userError } = await supabase.auth.getUser()
+      if (userError || !user) {
+        console.log('⚠️ No user found when fetching store:', userError?.message)
+        return null
+      }
+
+      // Get user details
+      const { data: userData, error: userDataError } = await supabase
+        .from('users')
+        .select('id, role')
+        .eq('email', user.email)
+        .single()
+
+      if (userDataError || !userData) {
+        console.log('⚠️ User data not found when fetching store:', userDataError?.message)
+        return null
+      }
+
+      // Try to get primary store first
+      const { data: primaryAssignment, error: primaryError } = await supabase
+        .from('user_store_assignments')
+        .select(`
+          store_id,
+          stores (
+            id,
+            name,
+            address
+          )
+        `)
+        .eq('user_id', userData.id)
+        .eq('is_primary', true)
+        .single()
+
+      if (!primaryError && primaryAssignment) {
+        const store = (primaryAssignment as any).stores
+        if (store && store.name) {
+          console.log(`✅ Found primary store: ${store.name}`)
+          return {
+            id: store.id,
+            name: store.name,
+            address: store.address
+          }
+        }
+      }
+
+      // If no primary store, get first assigned store
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('user_store_assignments')
+        .select(`
+          store_id,
+          stores (
+            id,
+            name,
+            address
+          )
+        `)
+        .eq('user_id', userData.id)
+        .limit(1)
+
+      if (!assignmentsError && assignments && assignments.length > 0) {
+        const assignment = assignments[0] as any
+        const store = assignment?.stores
+        if (store && store.name) {
+          console.log(`✅ Found first assigned store: ${store.name}`)
+          return {
+            id: store.id,
+            name: store.name,
+            address: store.address
+          }
+        }
+      }
+
+      console.log('⚠️ No store assignments found for user')
+      return null
+    } catch (error) {
+      console.error('❌ Error fetching selected store:', error)
+      return null
+    }
+  }
+
   private generateClaimStubText(order: Order): string {
     const orderNumber = order.orderNumber || `ORD-${order.orderId.substring(0, 8).toUpperCase()}`
     const date = new Date(order.orderDate)
@@ -739,13 +1072,20 @@ Test completed successfully!
     // Store name
     if (order.storeInfo?.name) {
       text += `${order.storeInfo.name.toUpperCase()}\n`
+      
+      // Store address if available
+      if (order.storeInfo.address) {
+        text += `${order.storeInfo.address}\n`
+      }
+      
+      text += `\n`
     }
     
     // Divider
     text += `================================\n`
     
-    // Claim Stub Header
-    text += `CLAIM STUB\n`
+    // Claim Ticket Header
+    text += `CLAIM TICKET\n`
     text += `\n`
     
     // Order Number
@@ -802,6 +1142,27 @@ Test completed successfully!
     const hours = String(date.getHours()).padStart(2, '0')
     const minutes = String(date.getMinutes()).padStart(2, '0')
     return `${hours}:${minutes}`
+  }
+
+  /**
+   * Generate QR code data for the order
+   * @param order Order object
+   * @returns QR code data string (JSON format)
+   */
+  private generateQRCodeData(order: Order): string {
+    const orderNumber = order.orderNumber || `ORD-${order.orderId.substring(0, 8).toUpperCase()}`
+    
+    // Create a JSON object with order information
+    const qrData = {
+      type: 'order',
+      orderId: order.orderId,
+      orderNumber: orderNumber,
+      customerName: order.customerName,
+      totalAmount: order.totalAmount,
+      date: order.orderDate
+    }
+    
+    return JSON.stringify(qrData)
   }
 }
 

@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator, RefreshControl, Dimensions } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 import ThermalPrinterService from '../services/ThermalPrinterService'
 import QRCodeDisplay from '../components/QRCodeDisplay'
+import { useNotifications } from '../context/NotificationContext'
 
 interface OrderItem {
   id: string
@@ -47,6 +49,8 @@ type PaymentFilter = 'all' | 'unpaid' | 'partial' | 'paid'
 
 export default function OrdersScreen() {
   const { currentStore } = useStore()
+  const { markOrdersAsViewed } = useNotifications()
+  const insets = useSafeAreaInsets()
   const [orders, setOrders] = useState<Order[]>([])
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
@@ -70,7 +74,15 @@ export default function OrdersScreen() {
 
   useEffect(() => {
     if (currentStore) {
+      // Clear orders first when store changes to avoid showing old data
+      setOrders([])
+      setFilteredOrders([])
       loadOrders()
+    } else {
+      // Clear orders if no store is selected
+      setOrders([])
+      setFilteredOrders([])
+      setLoading(false)
     }
   }, [currentStore])
 
@@ -79,11 +91,16 @@ export default function OrdersScreen() {
   }, [orders, orderFilter, paymentFilter, searchQuery])
 
   const loadOrders = async () => {
-    if (!currentStore) return
+    if (!currentStore) {
+      console.log('⚠️ No store selected, cannot load orders')
+      setOrders([])
+      setFilteredOrders([])
+      return
+    }
 
     try {
       setLoading(true)
-      console.log('Loading orders for store:', currentStore.id)
+      console.log('📦 Loading orders for store:', currentStore.id, currentStore.name)
 
       const { data, error } = await supabase
         .from('orders')
@@ -100,13 +117,33 @@ export default function OrdersScreen() {
         .eq('store_id', currentStore.id)
         .order('order_date', { ascending: false })
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ Error loading orders:', error)
+        throw error
+      }
 
-      console.log('Orders loaded:', data?.length || 0)
-      setOrders(data || [])
+      // Ensure all orders belong to the selected store (additional safety check)
+      const filteredData = (data || []).filter(order => order.store_id === currentStore.id)
+      
+      if (filteredData.length !== (data?.length || 0)) {
+        console.warn('⚠️ Some orders were filtered out - they did not match the selected store')
+      }
+      
+      console.log(`✅ Orders loaded: ${filteredData.length} orders for store ${currentStore.name}`)
+      
+      setOrders(filteredData)
+      
+      // Mark all loaded orders as viewed (user has seen them)
+      // This will also refresh the badge counts
+      const orderIds = filteredData.map(order => order.id)
+      if (orderIds.length > 0) {
+        await markOrdersAsViewed(orderIds)
+      }
     } catch (error: any) {
-      console.error('Error loading orders:', error)
-      Alert.alert('Error', 'Failed to load orders')
+      console.error('❌ Error loading orders:', error)
+      Alert.alert('Error', `Failed to load orders: ${error.message || 'Unknown error'}`)
+      setOrders([])
+      setFilteredOrders([])
     } finally {
       setLoading(false)
     }
@@ -157,7 +194,19 @@ export default function OrdersScreen() {
   }
 
   const updateOrderStatus = async (orderId: string, newStatus: Order['order_status']) => {
+    if (!currentStore) {
+      Alert.alert('Error', 'No store selected')
+      return
+    }
+
     try {
+      // Verify the order belongs to the current store before updating
+      const order = orders.find(o => o.id === orderId)
+      if (!order || order.store_id !== currentStore.id) {
+        Alert.alert('Error', 'Order does not belong to the selected store')
+        return
+      }
+
       const updateData: any = {
         order_status: newStatus,
       }
@@ -173,6 +222,7 @@ export default function OrdersScreen() {
         .from('orders')
         .update(updateData)
         .eq('id', orderId)
+        .eq('store_id', currentStore.id) // Additional safety: ensure order belongs to current store
 
       if (error) throw error
 
@@ -199,11 +249,22 @@ export default function OrdersScreen() {
       return
     }
 
+    // Validate store ownership BEFORE any database operations
+    if (!currentStore || selectedOrder.store_id !== currentStore.id) {
+      Alert.alert('Error', 'Order does not belong to the selected store')
+      return
+    }
+
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('User not authenticated')
 
-      // Create payment record
+      // Calculate new payment status
+      const newPaidAmount = selectedOrder.paid_amount + amount
+      const newBalance = selectedOrder.total_amount - newPaidAmount
+      const newPaymentStatus = newBalance === 0 ? 'paid' : 'partial'
+
+      // Create payment record (only after validation passes)
       const { error: paymentError } = await supabase
         .from('payments')
         .insert({
@@ -217,9 +278,6 @@ export default function OrdersScreen() {
       if (paymentError) throw paymentError
 
       // Update order payment status
-      const newPaidAmount = selectedOrder.paid_amount + amount
-      const newBalance = selectedOrder.total_amount - newPaidAmount
-      const newPaymentStatus = newBalance === 0 ? 'paid' : 'partial'
 
       const { error: orderError } = await supabase
         .from('orders')
@@ -229,6 +287,7 @@ export default function OrdersScreen() {
           payment_status: newPaymentStatus,
         })
         .eq('id', selectedOrder.id)
+        .eq('store_id', currentStore.id) // Additional safety: ensure order belongs to current store
 
       if (orderError) throw orderError
 
@@ -295,13 +354,13 @@ export default function OrdersScreen() {
 
       const success = await printerService.printOrderClaimStub(orderData)
       if (success) {
-        Alert.alert('Success', 'Claim stub printed successfully!')
+        Alert.alert('Success', 'Claim ticket printed successfully!')
       } else {
-        Alert.alert('Error', 'Failed to print claim stub. Please check printer connection.')
+        Alert.alert('Error', 'Failed to print claim ticket. Please check printer connection.')
       }
     } catch (error) {
       console.error('Print error:', error)
-      Alert.alert('Error', 'Failed to print claim stub')
+      Alert.alert('Error', 'Failed to print claim ticket')
     }
   }
 
@@ -469,7 +528,7 @@ export default function OrdersScreen() {
         onRequestClose={() => setShowOrderDetails(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: insets.bottom }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Order Details</Text>
               <TouchableOpacity onPress={() => setShowOrderDetails(false)}>
@@ -478,7 +537,10 @@ export default function OrdersScreen() {
             </View>
 
             {selectedOrder && (
-              <ScrollView style={styles.modalBody}>
+              <ScrollView 
+                style={styles.modalBody}
+                contentContainerStyle={{ paddingBottom: 20 }}
+              >
                 {/* Order Info */}
                 <View style={styles.detailSection}>
                   <Text style={styles.detailLabel}>Order Number</Text>
@@ -559,7 +621,7 @@ export default function OrdersScreen() {
                     onPress={printClaimStub}
                   >
                     <Ionicons name="print-outline" size={20} color="#3b82f6" />
-                    <Text style={[styles.printButtonText, { color: '#3b82f6' }]}>Print Claim Stub</Text>
+                    <Text style={[styles.printButtonText, { color: '#3b82f6' }]}>Print Claim Ticket</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -630,7 +692,7 @@ export default function OrdersScreen() {
         onRequestClose={() => setShowPaymentModal(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: insets.bottom }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Payment</Text>
               <TouchableOpacity onPress={() => setShowPaymentModal(false)}>
@@ -638,7 +700,10 @@ export default function OrdersScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalBody}>
+            <ScrollView 
+              style={styles.modalBody}
+              contentContainerStyle={{ paddingBottom: 20 }}
+            >
               {selectedOrder && (
                 <>
                   <View style={styles.balanceInfo}>
@@ -684,7 +749,7 @@ export default function OrdersScreen() {
                   </TouchableOpacity>
                 </>
               )}
-            </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>

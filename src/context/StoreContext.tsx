@@ -21,6 +21,7 @@ interface StoreContextType {
   currentStore: Store | null
   availableStores: Store[]
   switchStore: (storeId: string) => void
+  setStoreById: (storeId: string) => Promise<void>
   refreshStores: () => Promise<void>
   loading: boolean
 }
@@ -49,12 +50,8 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
 
       console.log('User found:', user.email)
       
-      // If we already have a current store, don't override it
-      if (currentStore) {
-        console.log('Current store already set, not overriding:', currentStore.name)
-        setLoading(false)
-        return
-      }
+      // Note: We no longer skip if store is set - we still need to refresh available stores
+      // But we won't override the current store if it's already set
       
       // Get user details
       const { data: userData } = await supabase
@@ -144,7 +141,48 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
   const switchStore = (storeId: string) => {
     const store = availableStores.find(s => s.id === storeId)
     if (store) {
+      console.log('🔄 Switching to store:', store.name)
       setCurrentStore(store)
+    } else {
+      console.warn('⚠️ Store not found in available stores:', storeId)
+    }
+  }
+
+  const setStoreById = async (storeId: string) => {
+    try {
+      console.log('📦 Setting store by ID:', storeId)
+      
+      // First try to find in available stores
+      let store = availableStores.find(s => s.id === storeId)
+      
+      if (store) {
+        console.log('✅ Found store in available stores:', store.name)
+        setCurrentStore(store)
+        return
+      }
+      
+      // If not found, fetch it from database
+      console.log('🔍 Store not in available stores, fetching from database...')
+      const { data, error } = await supabase
+        .from('stores')
+        .select('id, name, address, features')
+        .eq('id', storeId)
+        .single()
+      
+      if (error) throw error
+      
+      if (data) {
+        console.log('✅ Fetched store from database:', data.name)
+        setCurrentStore(data)
+        
+        // Add to available stores if not already there
+        if (!availableStores.some(s => s.id === storeId)) {
+          setAvailableStores([...availableStores, data])
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error setting store by ID:', error)
+      throw error
     }
   }
 
@@ -156,6 +194,7 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
     currentStore,
     availableStores,
     switchStore,
+    setStoreById,
     refreshStores,
     loading,
   }

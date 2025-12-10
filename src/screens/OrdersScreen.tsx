@@ -200,30 +200,29 @@ export default function OrdersScreen() {
     setFilteredOrders(filtered)
   }
 
-  const handleQRScan = async (scanData: {
-    type: string
-    orderId: string
-    orderNumber: string
-    customerName?: string
-    totalAmount?: number
-    date?: string
-  }) => {
-    console.log('📷 QR Code scanned:', scanData)
+  const handleQRScan = async (scannedData: string) => {
+    console.log('📷 QR Code scanned:', scannedData)
     
-    // Use orderId first, fallback to orderNumber
-    const searchValue = scanData.orderId || scanData.orderNumber
+    if (!scannedData) {
+      Alert.alert('Error', 'Could not read QR code')
+      return
+    }
+
+    // Since QR code now only contains order number, use it directly
+    const orderNumber = scannedData.trim()
     
-    if (!searchValue) {
-      Alert.alert('Error', 'Could not extract order information from QR code')
+    if (!orderNumber) {
+      Alert.alert('Error', 'Could not extract order number from QR code')
       return
     }
 
     // Set search query to locate the order
-    setSearchQuery(searchValue)
+    setSearchQuery(orderNumber)
+    setShowQRScanner(false) // Close scanner after scan
     
     // Check if the order exists in the current orders list
     const foundOrder = orders.find(order => 
-      order.id === searchValue || order.order_number === searchValue
+      order.id === orderNumber || order.order_number === orderNumber
     )
     
     if (foundOrder) {
@@ -263,13 +262,13 @@ export default function OrdersScreen() {
             payments (*)
           `)
           .eq('store_id', currentStore.id)
-          .or(`id.eq.${searchValue},order_number.eq.${searchValue}`)
+          .or(`id.eq.${orderNumber},order_number.eq.${orderNumber}`)
           .single()
 
         if (error || !data) {
           Alert.alert(
             'Order Not Found',
-            `Could not find order with ID/number: ${searchValue}\n\nThis order may not exist or belong to a different store.`
+            `Could not find order with number: ${orderNumber}\n\nThis order may not exist or belong to a different store.`
           )
           return
         }
@@ -867,39 +866,28 @@ export default function OrdersScreen() {
       </Modal>
 
       {/* QR Scanner Modal */}
-      {showQRScanner && (
-        <Modal
-          visible={showQRScanner}
-          animationType="slide"
-          transparent={false}
-          onRequestClose={() => setShowQRScanner(false)}
-        >
+      <Modal
+        visible={showQRScanner}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setShowQRScanner(false)}
+      >
+        {showQRScanner && (
           <QRScanner
+            key={showQRScanner ? 'scanner-active' : 'scanner-inactive'}
             onScan={(qrData: string) => {
-              // Parse the QR data and call handleQRScan
-              try {
-                const parsed = JSON.parse(qrData)
-                handleQRScan({
-                  type: parsed.type || 'order',
-                  orderId: parsed.orderId || parsed.orderNumber || qrData,
-                  orderNumber: parsed.orderNumber || parsed.orderId || qrData,
-                  customerName: parsed.customerName,
-                  totalAmount: parsed.totalAmount,
-                  date: parsed.date,
-                })
-              } catch {
-                // If not JSON, treat as plain order ID/number
-                handleQRScan({
-                  type: 'order',
-                  orderId: qrData,
-                  orderNumber: qrData,
-                })
+              console.log('📱 QR Scanner callback received:', qrData)
+              // Since QR code now only contains order number, use it directly
+              if (qrData && qrData.trim()) {
+                handleQRScan(qrData)
               }
             }}
-            onClose={() => setShowQRScanner(false)}
+            onClose={() => {
+              setShowQRScanner(false)
+            }}
           />
-        </Modal>
-      )}
+        )}
+      </Modal>
     </View>
   )
 }

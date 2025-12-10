@@ -1,15 +1,12 @@
-import React, { useRef, useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   StyleSheet,
   TouchableOpacity,
   Text,
   Vibration,
-  PermissionsAndroid,
-  Platform,
-  Alert,
 } from 'react-native'
-import { Camera } from 'react-native-camera-kit'
+import { CameraView, useCameraPermissions } from 'expo-camera'
 
 interface QRScannerProps {
   onScan?: (code: string) => void
@@ -17,58 +14,50 @@ interface QRScannerProps {
 }
 
 export default function QRScanner({ onScan, onClose }: QRScannerProps) {
-  const cameraRef = useRef<Camera>(null)
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null)
+  const [permission, requestPermission] = useCameraPermissions()
   const [isScanning, setIsScanning] = useState(true)
   const [scannedData, setScannedData] = useState('')
+  const [scanned, setScanned] = useState(false)
 
-  // Request camera permission
+  // Reset scanning state when component mounts
   useEffect(() => {
-    requestCameraPermission()
+    setIsScanning(true)
+    setScannedData('')
+    setScanned(false)
+    console.log('📷 QR Scanner initialized, scanning enabled:', isScanning)
   }, [])
 
-  const requestCameraPermission = async () => {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.CAMERA,
-          {
-            title: 'Camera Permission',
-            message: 'LaundroPOS needs access to your camera to scan QR codes',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          }
-        )
-        setHasPermission(granted === PermissionsAndroid.RESULTS.GRANTED)
-      } catch (err) {
-        console.warn('Camera permission error:', err)
-        setHasPermission(false)
-      }
-    } else {
-      // iOS - CameraKit handles permissions automatically
-      setHasPermission(true)
+  // Log when scanning state changes
+  useEffect(() => {
+    console.log('📷 Scanning state changed:', isScanning)
+  }, [isScanning])
+
+  const handleBarcodeScanned = ({ data }: { data: string }) => {
+    if (scanned || !isScanning) {
+      console.log('⚠️ Already scanned or scanning disabled, ignoring')
+      return
     }
-  }
 
-  const handleBarcodeScan = (event: any) => {
-    if (!isScanning) return
-
-    const { codeStringValue } = event.nativeEvent
-    if (codeStringValue) {
-      setScannedData(codeStringValue)
+    console.log('📷 QR Code scanned:', data)
+    
+    if (data && data.trim()) {
+      const scannedCode = data.trim()
+      console.log('✅ Successfully scanned QR code:', scannedCode)
+      setScannedData(scannedCode)
+      setScanned(true)
+      setIsScanning(false)
       Vibration.vibrate(100) // Haptic feedback
-      setIsScanning(false) // Stop after first scan
-      onScan?.(codeStringValue) // Callback for order lookup
+      onScan?.(scannedCode) // Callback for order lookup
     }
   }
 
   const restartScan = () => {
     setIsScanning(true)
     setScannedData('')
+    setScanned(false)
   }
 
-  if (hasPermission === null) {
+  if (!permission) {
     return (
       <View style={styles.center}>
         <Text style={styles.text}>Requesting camera permission...</Text>
@@ -81,14 +70,14 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
     )
   }
 
-  if (hasPermission === false) {
+  if (!permission.granted) {
     return (
       <View style={styles.center}>
         <Text style={styles.text}>Camera permission is required to scan QR codes.</Text>
         <Text style={[styles.text, { marginTop: 10, fontSize: 14 }]}>
-          Please enable camera permission in your device settings.
+          Please grant camera permission to continue.
         </Text>
-        <TouchableOpacity style={styles.button} onPress={requestCameraPermission}>
+        <TouchableOpacity style={styles.button} onPress={requestPermission}>
           <Text style={styles.buttonText}>Grant Permission</Text>
         </TouchableOpacity>
         {onClose && (
@@ -102,15 +91,13 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
 
   return (
     <View style={styles.container}>
-      <Camera
-        ref={cameraRef}
+      <CameraView
         style={StyleSheet.absoluteFill}
-        cameraType="back"
-        scanBarcode={isScanning}
-        showFrame={true}
-        laserColor="#00FF00"
-        frameColor="#00FF00"
-        onReadCode={handleBarcodeScan}
+        facing="back"
+        onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr'],
+        }}
       />
 
       {/* Header with close button */}
@@ -123,9 +110,20 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
       )}
 
       {/* Scan overlay: Center square guide for QR */}
-      <View style={styles.overlay}>
-        <View style={styles.scanFrame} />
-        <Text style={styles.instruction}>Align QR Code Here</Text>
+      <View style={styles.overlay} pointerEvents="none">
+        {/* Top dark area */}
+        <View style={styles.overlayTop} />
+        {/* Middle section with transparent center */}
+        <View style={styles.overlayMiddle}>
+          <View style={styles.overlaySide} />
+          <View style={styles.scanFrameContainer}>
+            <View style={styles.scanFrame} />
+            <Text style={styles.instruction}>Align QR Code Here</Text>
+          </View>
+          <View style={styles.overlaySide} />
+        </View>
+        {/* Bottom dark area */}
+        <View style={styles.overlayBottom} />
       </View>
 
       {/* Controls */}
@@ -142,7 +140,16 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
         <View style={styles.result}>
           <Text style={styles.resultText}>Scanned: {scannedData}</Text>
         </View>
-      ) : null}
+      ) : (
+        <View style={styles.debugInfo}>
+          <Text style={styles.debugText}>
+            Scanning: {isScanning ? 'Active' : 'Inactive'}
+          </Text>
+          <Text style={styles.debugText}>
+            Camera: {permission?.granted ? 'Ready' : 'Not Ready'}
+          </Text>
+        </View>
+      )}
     </View>
   )
 }
@@ -183,17 +190,40 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
+  },
+  overlayTop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  },
+  overlayMiddle: {
+    flexDirection: 'row',
+    height: 300,
+  },
+  overlaySide: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  },
+  scanFrameContainer: {
+    width: 250,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   scanFrame: {
     width: 250,
     height: 250,
-    borderWidth: 2,
-    borderColor: '#00FF00',
+    borderWidth: 3,
+    borderColor: '#3b82f6',
     borderRadius: 10,
     backgroundColor: 'transparent',
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  overlayBottom: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
   },
   instruction: {
     marginTop: 20,
@@ -233,5 +263,18 @@ const styles = StyleSheet.create({
   resultText: {
     color: 'white',
     fontSize: 14,
+  },
+  debugInfo: {
+    position: 'absolute',
+    top: 100,
+    left: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 10,
+    borderRadius: 5,
+  },
+  debugText: {
+    color: 'white',
+    fontSize: 12,
+    marginBottom: 4,
   },
 })

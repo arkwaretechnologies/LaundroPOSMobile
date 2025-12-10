@@ -50,14 +50,48 @@ export default function PrinterConfigScreen() {
       try {
         console.log('🔍 Detecting IPOS Printer using SDK...')
         
-        // Try to use the native module if available
+        // Try to use the native module if available - check multiple ways
         let POSTerminalPrinter = null
+        
+        // Method 1: Direct check
         if (NativeModules.POSTerminalPrinter) {
           POSTerminalPrinter = NativeModules.POSTerminalPrinter
-          console.log('✅ POSTerminalPrinter module found')
+          console.log('✅ POSTerminalPrinter module found (direct check)')
         }
         
-        // Use SDK detection method
+        // Method 2: Check all modules for case variations
+        if (!POSTerminalPrinter) {
+          const moduleKeys = Object.keys(NativeModules)
+          const posModuleKey = moduleKeys.find(key => 
+            key.toLowerCase() === 'posterminalprinter' || 
+            key === 'POSTerminalPrinter' ||
+            key.includes('POS') && key.includes('Printer')
+          )
+          if (posModuleKey) {
+            POSTerminalPrinter = NativeModules[posModuleKey]
+            console.log(`✅ POSTerminalPrinter module found (via key: ${posModuleKey})`)
+          }
+        }
+        
+        // Method 3: Verify module by checking for common methods
+        if (POSTerminalPrinter) {
+          const hasMethods = typeof POSTerminalPrinter.connectPrinterService === 'function' ||
+                            typeof POSTerminalPrinter.initializePrinter === 'function' ||
+                            typeof POSTerminalPrinter.printText === 'function' ||
+                            typeof POSTerminalPrinter.isPrinterConnected === 'function'
+          
+          if (!hasMethods) {
+            console.log('⚠️ POSTerminalPrinter module found but missing expected methods')
+            // Still consider it valid if it's an object (module exists)
+            if (typeof POSTerminalPrinter === 'object' && POSTerminalPrinter !== null) {
+              console.log('✅ Module object exists, treating as valid')
+            } else {
+              POSTerminalPrinter = null
+            }
+          }
+        }
+        
+        // Use SDK detection method if available
         if (POSTerminalPrinter && typeof POSTerminalPrinter.detectIPOSPrinter === 'function') {
           try {
             const detectionResult = await POSTerminalPrinter.detectIPOSPrinter()
@@ -67,25 +101,35 @@ export default function PrinterConfigScreen() {
               const isConnected = detectionResult.isConnected || false
               const serviceAvailable = detectionResult.serviceAvailable || false
               
+              // Try to verify printer status using API (must be PRINTER_NORMAL = 0)
+              let printerStatus = -1
+              let statusAvailable = false
+              try {
+                if (typeof POSTerminalPrinter.getPrinterStatus === 'function') {
+                  printerStatus = await POSTerminalPrinter.getPrinterStatus()
+                  statusAvailable = true
+                  console.log(`📊 Printer status: ${printerStatus} (0=PRINTER_NORMAL, 1=BUSY, 2=PAPER_OUT, 3=ERROR)`)
+                }
+              } catch (statusError) {
+                console.log('⚠️ Could not check printer status:', statusError)
+              }
+              
               foundPrinters.push({
                 id: 'pos-terminal',
                 name: 'IPOS Printer (GZPDA03)',
                 type: 'pos-terminal',
-                status: (isConnected || serviceAvailable) ? 'available' : 'unavailable',
+                status: (isConnected || serviceAvailable) && (statusAvailable ? printerStatus === 0 : true) ? 'available' : 'unavailable',
                 module: POSTerminalPrinter
               })
               console.log('✅ IPOS Printer detected via SDK', {
                 package: detectionResult.packageName,
                 available: serviceAvailable,
-                connected: isConnected
+                connected: isConnected,
+                status: statusAvailable ? printerStatus : 'unknown'
               })
             } else {
               console.log('⚠️ IPOS printer service not found on device')
-            }
-          } catch (detectError) {
-            console.log('⚠️ SDK detection failed, trying fallback:', detectError)
-            // Fallback: add printer if module exists
-            if (POSTerminalPrinter) {
+              // Module exists but service not found - still add printer (rebuild worked)
               foundPrinters.push({
                 id: 'pos-terminal',
                 name: 'IPOS Printer (GZPDA03)',
@@ -93,31 +137,93 @@ export default function PrinterConfigScreen() {
                 status: 'unavailable',
                 module: POSTerminalPrinter
               })
-              console.log('✅ IPOS Printer added (module exists, service check failed)')
+              console.log('✅ IPOS Printer added (module exists, service not found on device)')
+            }
+          } catch (detectError) {
+            console.log('⚠️ SDK detection failed, trying service method:', detectError)
+            
+            // Fallback: Try using POSTerminalPrinterService.detectIPOSPrinter()
+            try {
+              const serviceDetection = await POSTerminalPrinterService.detectIPOSPrinter()
+              if (serviceDetection && serviceDetection.found) {
+                foundPrinters.push({
+                  id: 'pos-terminal',
+                  name: 'IPOS Printer (GZPDA03)',
+                  type: 'pos-terminal',
+                  status: (serviceDetection.serviceAvailable || serviceDetection.aidlConnected) ? 'available' : 'unavailable',
+                  module: POSTerminalPrinter
+                })
+                console.log('✅ IPOS Printer detected via service method')
+              } else {
+                // Module exists but detection failed - still add printer
+                foundPrinters.push({
+                  id: 'pos-terminal',
+                  name: 'IPOS Printer (GZPDA03)',
+                  type: 'pos-terminal',
+                  status: 'unavailable',
+                  module: POSTerminalPrinter
+                })
+                console.log('✅ IPOS Printer added (module exists, detection check failed)')
+              }
+            } catch (serviceError) {
+              // Final fallback: add printer if module exists
+              foundPrinters.push({
+                id: 'pos-terminal',
+                name: 'IPOS Printer (GZPDA03)',
+                type: 'pos-terminal',
+                status: 'unavailable',
+                module: POSTerminalPrinter
+              })
+              console.log('✅ IPOS Printer added (module exists, all detection methods failed)')
             }
           }
-        } else {
-          // Module not available - check if we should still show it
-          console.log('⚠️ POSTerminalPrinter module not available')
-          console.log('📋 This might require rebuilding the app')
+        } else if (POSTerminalPrinter) {
+          // Module exists but detectIPOSPrinter method not available
+          // This means rebuild worked, but detection method might not be implemented
+          foundPrinters.push({
+            id: 'pos-terminal',
+            name: 'IPOS Printer (GZPDA03)',
+            type: 'pos-terminal',
+            status: 'unavailable',
+            module: POSTerminalPrinter
+          })
+          console.log('✅ IPOS Printer added (module exists, detection method not available)')
+        } else if (Platform.OS === 'android') {
+          // On Android, if module not found but device might have IPOS printer
+          // The module might be lazy-loaded or available at runtime when actually used
+          console.log('⚠️ POSTerminalPrinter module not found in NativeModules at scan time')
+          console.log('📋 Available modules:', Object.keys(NativeModules).join(', '))
+          console.log('💡 Module may be available at runtime when printing')
           
-          // Still try to detect using Android intents (if on Android)
-          if (Platform.OS === 'android') {
-            console.log('🔍 Attempting to detect IPOS service via Android system...')
-            // Note: We can't directly check Android services from JS,
-            // but we can add a placeholder that will work after rebuild
-            foundPrinters.push({
-              id: 'pos-terminal',
-              name: 'IPOS Printer (GZPDA03) - Rebuild Required',
-              type: 'pos-terminal',
-              status: 'unavailable',
-              module: null
-            })
-            console.log('⚠️ Added IPOS printer placeholder - rebuild app to enable')
-          }
+          // Always add the printer for Android devices (GZPDA03/POSPDA01)
+          // The module will be accessed dynamically when actually printing
+          foundPrinters.push({
+            id: 'pos-terminal',
+            name: 'IPOS Printer (GZPDA03)',
+            type: 'pos-terminal',
+            status: 'unavailable',
+            module: null // Will be accessed dynamically when needed
+          })
+          console.log('✅ IPOS Printer added (Android device - module will be accessed at runtime)')
         }
       } catch (error) {
         console.error('❌ IPOS Printer detection failed:', error)
+        // Even if detection fails, add the printer for Android devices
+        // The module might be available at runtime
+        if (Platform.OS === 'android') {
+          // Check if printer already added
+          const alreadyAdded = foundPrinters.some(p => p.id === 'pos-terminal')
+          if (!alreadyAdded) {
+            foundPrinters.push({
+              id: 'pos-terminal',
+              name: 'IPOS Printer (GZPDA03)',
+              type: 'pos-terminal',
+              status: 'unavailable',
+              module: null // Will be accessed dynamically when needed
+            })
+            console.log('✅ IPOS Printer added (fallback after error)')
+          }
+        }
       }
 
       // 2. Check for Sunmi Printer
@@ -219,73 +325,69 @@ export default function PrinterConfigScreen() {
 
     setLoading(true)
     try {
-      // If POS Terminal printer is selected, test it directly
+      // If POS Terminal printer is selected, force use of POSTerminalPrinterService
+      // Even if module isn't in NativeModules, try to use it as it may be available at runtime
       if (selectedPrinter === 'pos-terminal') {
-        const { POSTerminalPrinter } = NativeModules
-        if (!POSTerminalPrinter) {
-          Alert.alert('Error', 'POSTerminalPrinter module not found')
-          setLoading(false)
-          return
-        }
+        console.log('🔍 Testing IPOS printer using POSTerminalPrinterService...')
+        
+        try {
+          // Always try to use POSTerminalPrinterService directly
+          // The module might not be in NativeModules at scan time but available at runtime
+          console.log('🔌 Step 1: Connecting to printer service...')
+          const connected = await POSTerminalPrinterService.connectPrinterService()
+          if (!connected) {
+            // If connection fails, the module might not be available
+            // But let's still try initialization in case it works
+            console.log('⚠️ Connection check failed, but trying initialization anyway...')
+          }
 
-        // Check connection
-        let isConnected = await POSTerminalPrinter.isPrinterConnected()
-        console.log(`🔍 Initial connection status: ${isConnected}`)
-
-        // If not connected, try to connect via AIDL
-        if (!isConnected) {
-          console.log('🔌 Attempting to connect to printer service via AIDL...')
-          const connected = await POSTerminalPrinter.connectPrinterService()
-          console.log(`🔌 AIDL connection result: ${connected}`)
-          isConnected = connected
-          
-          if (!isConnected) {
+          console.log('🔧 Step 2: Initializing printer...')
+          const initialized = await POSTerminalPrinterService.initializePrinter()
+          if (!initialized) {
             Alert.alert(
-              'Connection Failed', 
-              'Could not connect to IPOS printer service via AIDL. Please ensure:\n\n' +
-              '1. The IPOS printer service app is installed\n' +
-              '2. The service is running on your device\n' +
-              '3. Your device has a built-in printer (GZPDA03/POSPDA01)'
+              'Initialization Failed',
+              'Could not initialize IPOS printer.\n\n' +
+              'The POSTerminalPrinter module may not be registered in NativeModules.\n\n' +
+              'If you can print from other parts of the app, try:\n' +
+              '1. Restart the app completely\n' +
+              '2. Check if the native module needs to be rebuilt\n' +
+              '3. Verify the IPOS printer service app is installed'
             )
             setLoading(false)
             return
           }
+
+          console.log('🖨️ Step 3: Executing test print...')
+          const testSuccess = await POSTerminalPrinterService.testPrint()
+          
+          if (testSuccess) {
+            Alert.alert('Success', 'IPOS printer test print successful!')
+          } else {
+            Alert.alert('Print Failed', 'Test print execution failed. Check console logs for details.')
+          }
+        } catch (error: any) {
+          console.error('Test print error:', error)
+          const errorMessage = error?.message || 'Test print failed'
+          
+          // Check if it's a module not found error
+          if (errorMessage.includes('not found') || errorMessage.includes('Module not available')) {
+            Alert.alert(
+              'Module Not Found',
+              'POSTerminalPrinter module is not accessible.\n\n' +
+              'Possible solutions:\n' +
+              '1. Rebuild the app to register the native module\n' +
+              '2. Restart the app completely\n' +
+              '3. Check if the module is properly linked in the native code\n\n' +
+              'If you can print from OrdersScreen, the module exists but may need to be accessed differently.'
+            )
+          } else {
+            Alert.alert(
+              'Error',
+              `${errorMessage}\n\n` +
+              'Check console logs for more details.'
+            )
+          }
         }
-
-        // Get printer status
-        const status = await POSTerminalPrinter.getPrinterStatus()
-        console.log('📊 Printer status:', status)
-        
-        // Initialize printer
-        await POSTerminalPrinter.initializePrinter()
-        
-        // Print test text
-        const testText = [
-          '\n',
-          '================================\n',
-          '    PRINTER TEST - IPOS SDK\n',
-          '================================\n',
-          '\n',
-          'Device: GZPDA03 POSPDA01\n',
-          'SDK: IPOS Printer Service\n',
-          'Status: ' + (status === 0 ? 'NORMAL' : 'OTHER') + '\n',
-          '\n',
-          'This is a test print to verify\n',
-          'that the IPOS printer SDK is\n',
-          'working correctly.\n',
-          '\n',
-          'Date: ' + new Date().toLocaleString() + '\n',
-          '\n',
-          '================================\n',
-          '\n\n'
-        ].join('')
-
-        await POSTerminalPrinter.printText(testText)
-        
-        // Perform print with feed lines
-        await POSTerminalPrinter.printerPerformPrint(3)
-        
-        Alert.alert('Success', 'IPOS printer test print successful!')
       } else {
         // Use the general printer service for other printer types
         await printerService.initializePrinter()

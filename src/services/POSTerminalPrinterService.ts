@@ -140,20 +140,62 @@ class POSTerminalPrinterService {
       console.log('🧪 Testing POS Terminal printer...')
       
       const { POSTerminalPrinter } = NativeModules
-      const testText = `
-PRINTER TEST
-POS Terminal OK
-Connection Successful
+      if (!POSTerminalPrinter) {
+        console.log('❌ POSTerminalPrinter module not found')
+        return false
+      }
 
-Test completed successfully!
-`
+      // Check printer status first (must be PRINTER_NORMAL = 0)
+      const status = await this.getPrinterStatus()
+      console.log(`📊 Printer status before test print: ${status}`)
+      
+      if (status !== 0) {
+        console.error(`❌ Printer status is not NORMAL (${status}). Status must be 0 (PRINTER_NORMAL) to print.`)
+        return false
+      }
 
-      const success = await POSTerminalPrinter.printText(testText)
-      if (success) {
+      // Build test print content using proper API methods
+      // Step 1: Print header with formatting
+      await POSTerminalPrinter.printSpecFormatText(
+        'PRINTER TEST',
+        'ST',  // typeface
+        32,    // fontsize (large)
+        1      // alignment: 1 = center
+      )
+
+      // Step 2: Print separator line
+      await POSTerminalPrinter.printText('================================\n')
+
+      // Step 3: Print test information
+      await POSTerminalPrinter.printText('POS Terminal Printer\n')
+      await POSTerminalPrinter.printText('Connection: OK\n')
+      await POSTerminalPrinter.printText('Status: NORMAL\n')
+      await POSTerminalPrinter.printText(`Time: ${new Date().toLocaleString()}\n`)
+
+      // Step 4: Print separator
+      await POSTerminalPrinter.printText('================================\n')
+
+      // Step 5: Feed some blank lines before execution
+      await POSTerminalPrinter.printerFeedLines(2)
+
+      // Step 6: Check status again before executing print
+      const finalStatus = await this.getPrinterStatus()
+      if (finalStatus !== 0) {
+        console.error(`❌ Printer status changed to ${finalStatus} - cannot execute print`)
+        return false
+      }
+
+      // Step 7: Execute printing (feed 3 lines after print for easy tearing)
+      // According to API: printerPerformPrint must be called to actually print
+      // feedlines parameter: number of paper feed lines after printing
+      console.log('🖨️ Executing print with printerPerformPrint(3)...')
+      const printSuccess = await POSTerminalPrinter.printerPerformPrint(3)
+      
+      if (printSuccess) {
         console.log('✅ Test print successful via POS Terminal printer')
         return true
       } else {
-        console.log('❌ Test print failed via POS Terminal printer')
+        console.log('❌ printerPerformPrint returned false - print may have failed')
         return false
       }
     } catch (error) {
@@ -1147,22 +1189,11 @@ Test completed successfully!
   /**
    * Generate QR code data for the order
    * @param order Order object
-   * @returns QR code data string (JSON format)
+   * @returns QR code data string (order number only)
    */
   private generateQRCodeData(order: Order): string {
-    const orderNumber = order.orderNumber || `ORD-${order.orderId.substring(0, 8).toUpperCase()}`
-    
-    // Create a JSON object with order information
-    const qrData = {
-      type: 'order',
-      orderId: order.orderId,
-      orderNumber: orderNumber,
-      customerName: order.customerName,
-      totalAmount: order.totalAmount,
-      date: order.orderDate
-    }
-    
-    return JSON.stringify(qrData)
+    // Return only the order number, with fallback if not available
+    return order.orderNumber || `ORD-${order.orderId.substring(0, 8).toUpperCase()}`
   }
 }
 

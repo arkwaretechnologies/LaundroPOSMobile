@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 import ThermalPrinterService from '../services/ThermalPrinterService'
 import QRCodeDisplay from '../components/QRCodeDisplay'
+import QRScanner from '../components/QRScanner'
 import { useNotifications } from '../context/NotificationContext'
 
 interface OrderItem {
@@ -71,6 +72,9 @@ export default function OrdersScreen() {
   // Print functionality
   const [printerService] = useState(ThermalPrinterService.getInstance())
   const [showQRCode, setShowQRCode] = useState(false)
+  
+  // QR Scanner
+  const [showQRScanner, setShowQRScanner] = useState(false)
 
   useEffect(() => {
     if (currentStore) {
@@ -162,6 +166,9 @@ export default function OrdersScreen() {
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim()
       filtered = filtered.filter(order => {
+        // Search by order ID (exact match)
+        if (order.id.toLowerCase() === query) return true
+        
         // Search by order number
         if (order.order_number.toLowerCase().includes(query)) return true
         
@@ -191,6 +198,105 @@ export default function OrdersScreen() {
     }
 
     setFilteredOrders(filtered)
+  }
+
+  const handleQRScan = async (scanData: {
+    type: string
+    orderId: string
+    orderNumber: string
+    customerName?: string
+    totalAmount?: number
+    date?: string
+  }) => {
+    console.log('📷 QR Code scanned:', scanData)
+    
+    // Use orderId first, fallback to orderNumber
+    const searchValue = scanData.orderId || scanData.orderNumber
+    
+    if (!searchValue) {
+      Alert.alert('Error', 'Could not extract order information from QR code')
+      return
+    }
+
+    // Set search query to locate the order
+    setSearchQuery(searchValue)
+    
+    // Check if the order exists in the current orders list
+    const foundOrder = orders.find(order => 
+      order.id === searchValue || order.order_number === searchValue
+    )
+    
+    if (foundOrder) {
+      // Order found in current list - scroll to it and highlight
+      Alert.alert(
+        'Order Found',
+        `Order ${foundOrder.order_number} located successfully!`,
+        [
+          {
+            text: 'View Details',
+            onPress: () => {
+              setSelectedOrder(foundOrder)
+              setShowOrderDetails(true)
+            }
+          },
+          { text: 'OK' }
+        ]
+      )
+    } else {
+      // Order might not be loaded yet, try to fetch it
+      if (!currentStore) {
+        Alert.alert('Error', 'No store selected')
+        return
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('orders')
+          .select(`
+            *,
+            customers (
+              first_name,
+              last_name,
+              phone
+            ),
+            order_items (*),
+            payments (*)
+          `)
+          .eq('store_id', currentStore.id)
+          .or(`id.eq.${searchValue},order_number.eq.${searchValue}`)
+          .single()
+
+        if (error || !data) {
+          Alert.alert(
+            'Order Not Found',
+            `Could not find order with ID/number: ${searchValue}\n\nThis order may not exist or belong to a different store.`
+          )
+          return
+        }
+
+        // Reload orders to include the found order in the list
+        await loadOrders()
+        
+        // Show alert and allow viewing details using the fetched data
+        Alert.alert(
+          'Order Found',
+          `Order ${data.order_number} located successfully!`,
+          [
+            {
+              text: 'View Details',
+              onPress: () => {
+                setSelectedOrder(data)
+                setShowOrderDetails(true)
+              }
+            },
+            { text: 'OK' }
+          ]
+        )
+      } catch (error: any) {
+        console.error('Error fetching order:', error)
+        Alert.alert('Error', `Failed to locate order: ${error.message || 'Unknown error'}`)
+      }
+    }
   }
 
   const updateOrderStatus = async (orderId: string, newStatus: Order['order_status']) => {
@@ -423,6 +529,12 @@ export default function OrdersScreen() {
             <Ionicons name="close-circle" size={20} color="#9ca3af" />
           </TouchableOpacity>
         )}
+        <TouchableOpacity 
+          onPress={() => setShowQRScanner(true)} 
+          style={styles.scanButton}
+        >
+          <Ionicons name="qr-code-outline" size={22} color="#3b82f6" />
+        </TouchableOpacity>
       </View>
 
       {/* Filters */}
@@ -753,6 +865,41 @@ export default function OrdersScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* QR Scanner Modal */}
+      {showQRScanner && (
+        <Modal
+          visible={showQRScanner}
+          animationType="slide"
+          transparent={false}
+          onRequestClose={() => setShowQRScanner(false)}
+        >
+          <QRScanner
+            onScan={(qrData: string) => {
+              // Parse the QR data and call handleQRScan
+              try {
+                const parsed = JSON.parse(qrData)
+                handleQRScan({
+                  type: parsed.type || 'order',
+                  orderId: parsed.orderId || parsed.orderNumber || qrData,
+                  orderNumber: parsed.orderNumber || parsed.orderId || qrData,
+                  customerName: parsed.customerName,
+                  totalAmount: parsed.totalAmount,
+                  date: parsed.date,
+                })
+              } catch {
+                // If not JSON, treat as plain order ID/number
+                handleQRScan({
+                  type: 'order',
+                  orderId: qrData,
+                  orderNumber: qrData,
+                })
+              }
+            }}
+            onClose={() => setShowQRScanner(false)}
+          />
+        </Modal>
+      )}
     </View>
   )
 }
@@ -810,6 +957,10 @@ const styles = StyleSheet.create({
   },
   clearButton: {
     padding: 4,
+  },
+  scanButton: {
+    padding: 8,
+    marginLeft: 8,
   },
   filters: {
     backgroundColor: '#ffffff',

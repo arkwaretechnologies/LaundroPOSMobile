@@ -290,21 +290,43 @@ export default function OrdersScreen() {
       return
     }
 
-    // Since QR code now only contains order number, use it directly
-    const orderNumber = scannedData.trim()
+    let orderNumber: string | null = null
+    let orderId: string | null = null
+
+    // Try to parse as JSON first (QR codes are generated as JSON)
+    try {
+      const parsed = JSON.parse(scannedData.trim())
+      orderNumber = parsed.orderNumber || parsed.orderId || null
+      orderId = parsed.orderId || parsed.orderNumber || null
+      console.log('✅ Parsed QR code JSON:', { orderNumber, orderId })
+    } catch (error) {
+      // If parsing fails, treat as plain string (backward compatibility)
+      console.log('⚠️ QR code is not JSON, using as plain string')
+      const trimmed = scannedData.trim()
+      if (trimmed.length > 0) {
+        orderNumber = trimmed
+        orderId = trimmed
+      }
+    }
+
+    // Use orderNumber if available, otherwise fall back to orderId or scannedData
+    const searchValue = orderNumber || orderId || scannedData.trim()
     
-    if (!orderNumber) {
-      Alert.alert('Error', 'Could not extract order number from QR code')
+    if (!searchValue) {
+      Alert.alert('Error', 'Could not extract order information from QR code')
       return
     }
 
     // Set search query to locate the order
-    setSearchQuery(orderNumber)
+    setSearchQuery(searchValue)
     setShowQRScanner(false) // Close scanner after scan
     
     // Check if the order exists in the current orders list
     const foundOrder = orders.find(order => 
-      order.id === orderNumber || order.order_number === orderNumber
+      order.id === searchValue || 
+      order.order_number === searchValue ||
+      (orderId && order.id === orderId) ||
+      (orderNumber && order.order_number === orderNumber)
     )
     
     if (foundOrder) {
@@ -331,6 +353,7 @@ export default function OrdersScreen() {
       }
 
       try {
+        // Build query - try both orderId and orderNumber
         const { data, error } = await supabase
           .from('orders')
           .select(`
@@ -344,13 +367,13 @@ export default function OrdersScreen() {
             payments (*)
           `)
           .eq('store_id', currentStore.id)
-          .or(`id.eq.${orderNumber},order_number.eq.${orderNumber}`)
+          .or(`id.eq.${searchValue},order_number.eq.${searchValue}`)
           .single()
 
         if (error || !data) {
           Alert.alert(
             'Order Not Found',
-            `Could not find order with number: ${orderNumber}\n\nThis order may not exist or belong to a different store.`
+            `Could not find order: ${searchValue}\n\nThis order may not exist or belong to a different store.`
           )
           return
         }

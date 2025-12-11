@@ -82,9 +82,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
         { icon: 'swap-horizontal', title: 'Switch Store', subtitle: currentStore?.name || 'Select a store', color: '#3b82f6', action: 'switchStore' },
         { icon: 'storefront', title: 'Store Information', subtitle: 'Business details', color: '#f59e0b' },
         { icon: 'pricetag', title: 'Services & Pricing', subtitle: 'Manage laundry services', color: '#10b981', action: 'services' },
-        { icon: 'receipt', title: 'Receipt Settings', subtitle: 'Print and email options', color: '#8b5cf6' },
         { icon: 'print', title: 'Printer Configuration', subtitle: 'Setup and select printer', color: '#8b5cf6', action: 'printer' },
-        { icon: 'time', title: 'Business Hours', subtitle: 'Operating schedule', color: '#06b6d4' },
         { icon: 'card', title: 'Payment Methods', subtitle: 'Accept payment types', color: '#ef4444', action: 'paymentMethods' },
       ]
     },

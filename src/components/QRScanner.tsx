@@ -1,15 +1,14 @@
-import React, { useRef, useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   StyleSheet,
   TouchableOpacity,
   Text,
   Vibration,
-  PermissionsAndroid,
   Platform,
   Alert,
 } from 'react-native'
-import { Camera } from 'react-native-camera-kit'
+import { CameraView, useCameraPermissions } from 'expo-camera'
 
 interface QRScannerProps {
   onScan?: (code: string) => void
@@ -17,49 +16,26 @@ interface QRScannerProps {
 }
 
 export default function QRScanner({ onScan, onClose }: QRScannerProps) {
-  const cameraRef = useRef<Camera>(null)
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null)
+  const [permission, requestPermission] = useCameraPermissions()
   const [isScanning, setIsScanning] = useState(true)
   const [scannedData, setScannedData] = useState('')
 
-  // Request camera permission
   useEffect(() => {
-    requestCameraPermission()
-  }, [])
-
-  const requestCameraPermission = async () => {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.CAMERA,
-          {
-            title: 'Camera Permission',
-            message: 'LaundroPOS needs access to your camera to scan QR codes',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          }
-        )
-        setHasPermission(granted === PermissionsAndroid.RESULTS.GRANTED)
-      } catch (err) {
-        console.warn('Camera permission error:', err)
-        setHasPermission(false)
-      }
-    } else {
-      // iOS - CameraKit handles permissions automatically
-      setHasPermission(true)
+    if (permission === null) {
+      requestPermission()
     }
-  }
+  }, [permission])
 
-  const handleBarcodeScan = (event: any) => {
+  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
     if (!isScanning) return
 
-    const { codeStringValue } = event.nativeEvent
-    if (codeStringValue) {
-      setScannedData(codeStringValue)
+    console.log('📷 QR Code scanned:', { type, data })
+    
+    if (data) {
+      setScannedData(data)
       Vibration.vibrate(100) // Haptic feedback
       setIsScanning(false) // Stop after first scan
-      onScan?.(codeStringValue) // Callback for order lookup
+      onScan?.(data) // Callback for order lookup
     }
   }
 
@@ -68,7 +44,7 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
     setScannedData('')
   }
 
-  if (hasPermission === null) {
+  if (permission === null) {
     return (
       <View style={styles.center}>
         <Text style={styles.text}>Requesting camera permission...</Text>
@@ -81,14 +57,14 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
     )
   }
 
-  if (hasPermission === false) {
+  if (permission.granted === false) {
     return (
       <View style={styles.center}>
         <Text style={styles.text}>Camera permission is required to scan QR codes.</Text>
         <Text style={[styles.text, { marginTop: 10, fontSize: 14 }]}>
           Please enable camera permission in your device settings.
         </Text>
-        <TouchableOpacity style={styles.button} onPress={requestCameraPermission}>
+        <TouchableOpacity style={styles.button} onPress={requestPermission}>
           <Text style={styles.buttonText}>Grant Permission</Text>
         </TouchableOpacity>
         {onClose && (
@@ -102,15 +78,13 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
 
   return (
     <View style={styles.container}>
-      <Camera
-        ref={cameraRef}
+      <CameraView
         style={StyleSheet.absoluteFill}
-        cameraType="back"
-        scanBarcode={isScanning}
-        showFrame={true}
-        laserColor="#00FF00"
-        frameColor="#00FF00"
-        onReadCode={handleBarcodeScan}
+        facing="back"
+        onBarcodeScanned={isScanning ? handleBarCodeScanned : undefined}
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr'],
+        }}
       />
 
       {/* Header with close button */}

@@ -57,7 +57,11 @@ export default function OrdersScreen() {
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [orderFilter, setOrderFilter] = useState<OrderFilter>('all')
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [page, setPage] = useState(0)
+  const ITEMS_PER_PAGE = 20
+  const [orderFilter, setOrderFilter] = useState<OrderFilter>('pending')
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   
@@ -83,7 +87,7 @@ export default function OrdersScreen() {
       // Clear orders first when store changes to avoid showing old data
       setOrders([])
       setFilteredOrders([])
-      loadOrders()
+      loadOrders(true) // Reset pagination
       loadPaymentMethods()
     } else {
       // Clear orders if no store is selected
@@ -97,7 +101,14 @@ export default function OrdersScreen() {
     applyFilters()
   }, [orders, orderFilter, paymentFilter, searchQuery])
 
-  const loadOrders = async () => {
+  // Reset pagination when filter changes
+  useEffect(() => {
+    if (currentStore) {
+      loadOrders(true) // Reset and reload with new filter
+    }
+  }, [orderFilter, paymentFilter])
+
+  const loadOrders = async (reset: boolean = false) => {
     if (!currentStore) {
       console.log('⚠️ No store selected, cannot load orders')
       setOrders([])
@@ -106,8 +117,19 @@ export default function OrdersScreen() {
     }
 
     try {
-      setLoading(true)
-      console.log('📦 Loading orders for store:', currentStore.id, currentStore.name)
+      if (reset) {
+        setLoading(true)
+        setPage(0)
+        setHasMore(true)
+      } else {
+        setLoadingMore(true)
+      }
+
+      const currentPage = reset ? 0 : page
+      const from = currentPage * ITEMS_PER_PAGE
+      const to = from + ITEMS_PER_PAGE - 1
+
+      console.log(`📦 Loading orders for store: ${currentStore.id} (page ${currentPage + 1}, items ${from}-${to})`)
 
       const { data, error } = await supabase
         .from('orders')
@@ -123,6 +145,7 @@ export default function OrdersScreen() {
         `)
         .eq('store_id', currentStore.id)
         .order('order_date', { ascending: false })
+        .range(from, to)
 
       if (error) {
         console.error('❌ Error loading orders:', error)
@@ -136,9 +159,18 @@ export default function OrdersScreen() {
         console.warn('⚠️ Some orders were filtered out - they did not match the selected store')
       }
       
-      console.log(`✅ Orders loaded: ${filteredData.length} orders for store ${currentStore.name}`)
+      console.log(`✅ Orders loaded: ${filteredData.length} orders (page ${currentPage + 1})`)
       
-      setOrders(filteredData)
+      // Check if there are more items to load
+      setHasMore(filteredData.length === ITEMS_PER_PAGE)
+      
+      if (reset) {
+        setOrders(filteredData)
+        setPage(1)
+      } else {
+        setOrders(prev => [...prev, ...filteredData])
+        setPage(prev => prev + 1)
+      }
       
       // Mark all loaded orders as viewed (user has seen them)
       // This will also refresh the badge counts
@@ -148,17 +180,26 @@ export default function OrdersScreen() {
       }
     } catch (error: any) {
       console.error('❌ Error loading orders:', error)
-      Alert.alert('Error', `Failed to load orders: ${error.message || 'Unknown error'}`)
-      setOrders([])
-      setFilteredOrders([])
+      if (reset) {
+        Alert.alert('Error', `Failed to load orders: ${error.message || 'Unknown error'}`)
+        setOrders([])
+        setFilteredOrders([])
+      }
     } finally {
       setLoading(false)
+      setLoadingMore(false)
+    }
+  }
+
+  const loadMoreOrders = () => {
+    if (!loadingMore && hasMore && !loading) {
+      loadOrders(false)
     }
   }
 
   const onRefresh = async () => {
     setRefreshing(true)
-    await loadOrders()
+    await loadOrders(true) // Reset pagination on refresh
     await loadPaymentMethods()
     setRefreshing(false)
   }
@@ -372,7 +413,7 @@ export default function OrdersScreen() {
 
       if (error) throw error
 
-      Alert.alert('Success', `Order status updated to ${newStatus}`)
+      Alert.alert('Success', `Order status updated to ${formatStatusText(newStatus)}`)
       loadOrders()
       setShowOrderDetails(false)
     } catch (error: any) {
@@ -469,6 +510,17 @@ export default function OrdersScreen() {
       case 'completed': return '#6b7280'
       case 'cancelled': return '#ef4444'
       default: return '#9ca3af'
+    }
+  }
+
+  const formatStatusText = (status: Order['order_status']) => {
+    switch (status) {
+      case 'pending': return 'Pending'
+      case 'in_progress': return 'In Progress'
+      case 'ready': return 'Ready'
+      case 'completed': return 'Completed'
+      case 'cancelled': return 'Cancelled'
+      default: return status
     }
   }
 
@@ -594,7 +646,7 @@ export default function OrdersScreen() {
         contentContainerStyle={styles.filtersContent}
       >
         <Text style={styles.filterLabel}>Status:</Text>
-        {(['all', 'pending', 'in_progress', 'ready', 'completed'] as OrderFilter[]).map(filter => (
+        {(['pending', 'in_progress', 'ready', 'completed', 'all'] as OrderFilter[]).map(filter => (
           <TouchableOpacity
             key={filter}
             style={[styles.filterButton, orderFilter === filter && styles.filterButtonActive]}
@@ -626,6 +678,15 @@ export default function OrdersScreen() {
       <ScrollView 
         style={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        onScroll={(event: any) => {
+          const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent
+          const paddingToBottom = 20
+          const isCloseToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom
+          if (isCloseToBottom && hasMore && !loadingMore && !loading) {
+            loadMoreOrders()
+          }
+        }}
+        scrollEventThrottle={400}
       >
         {filteredOrders.length === 0 ? (
           <View style={styles.emptyState}>
@@ -678,6 +739,17 @@ export default function OrdersScreen() {
               </View>
             </TouchableOpacity>
           ))
+        )}
+        {loadingMore && (
+          <View style={styles.loadingMoreContainer}>
+            <ActivityIndicator size="small" color="#3b82f6" />
+            <Text style={styles.loadingMoreText}>Loading more orders...</Text>
+          </View>
+        )}
+        {!hasMore && filteredOrders.length > 0 && (
+          <View style={styles.endOfListContainer}>
+            <Text style={styles.endOfListText}>No more orders to load</Text>
+          </View>
         )}
       </ScrollView>
 
@@ -826,6 +898,13 @@ export default function OrdersScreen() {
                     <TouchableOpacity
                       style={styles.actionButtonSecondary}
                       onPress={() => {
+                        // If order is ready but unpaid, redirect to payment instead of completing
+                        if (selectedOrder.order_status === 'ready' && selectedOrder.payment_status === 'unpaid') {
+                          setShowOrderDetails(false)
+                          setShowPaymentModal(true)
+                          return
+                        }
+                        
                         const nextStatus = selectedOrder.order_status === 'pending' ? 'in_progress' : 
                                          selectedOrder.order_status === 'in_progress' ? 'ready' : 'completed'
                         updateOrderStatus(selectedOrder.id, nextStatus)
@@ -1065,6 +1144,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#9ca3af',
     marginTop: 4,
+  },
+  loadingMoreContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    gap: 8,
+  },
+  loadingMoreText: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  endOfListContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  endOfListText: {
+    fontSize: 14,
+    color: '#9ca3af',
+    fontStyle: 'italic',
   },
   orderCard: {
     backgroundColor: '#ffffff',

@@ -62,6 +62,10 @@ const POSScreen: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Customer[]>([])
   const [searchingCustomers, setSearchingCustomers] = useState(false)
+  const [loadingMoreCustomers, setLoadingMoreCustomers] = useState(false)
+  const [hasMoreCustomers, setHasMoreCustomers] = useState(true)
+  const [customerPage, setCustomerPage] = useState(0)
+  const CUSTOMERS_PER_PAGE = 20
   
   // New customer form state
   const [newCustomerFirstName, setNewCustomerFirstName] = useState('')
@@ -208,50 +212,116 @@ const POSScreen: React.FC = () => {
     }
   }
 
-  // Search customers by first name, last name, phone, email, or customer number
-  const searchCustomers = async (query: string) => {
-    if (!currentStore || query.trim().length < 2) {
+  // Load all customers with pagination, ordered by name
+  const loadCustomers = async (reset: boolean = false, searchTerm: string = '') => {
+    if (!currentStore) {
       setSearchResults([])
       return
     }
 
     try {
-      setSearchingCustomers(true)
-      const searchTerm = `%${query.trim()}%`
-      
-      console.log('Searching customers with query:', query)
-      
-      const { data, error } = await supabase
+      if (reset) {
+        setSearchingCustomers(true)
+        setCustomerPage(0)
+        setHasMoreCustomers(true)
+      } else {
+        setLoadingMoreCustomers(true)
+      }
+
+      const currentPage = reset ? 0 : customerPage
+      const from = currentPage * CUSTOMERS_PER_PAGE
+      const to = from + CUSTOMERS_PER_PAGE - 1
+
+      let query = supabase
         .from('customers')
         .select('id, first_name, last_name, phone, email, customer_number, loyalty_points')
         .eq('store_id', currentStore.id)
         .eq('is_active', true)
-        .or(`first_name.ilike.${searchTerm},last_name.ilike.${searchTerm},phone.ilike.${searchTerm},email.ilike.${searchTerm},customer_number.ilike.${searchTerm}`)
-        .limit(10)
+        .order('first_name', { ascending: true })
+        .order('last_name', { ascending: true })
+        .range(from, to)
 
-      console.log('Search results:', data?.length || 0, 'customers found')
+      // If there's a search term, filter by it
+      if (searchTerm.trim().length >= 2) {
+        const searchPattern = `%${searchTerm.trim()}%`
+        query = query.or(`first_name.ilike.${searchPattern},last_name.ilike.${searchPattern},phone.ilike.${searchPattern},email.ilike.${searchPattern},customer_number.ilike.${searchPattern}`)
+      }
+
+      const { data, error } = await query
+
       if (error) throw error
-      setSearchResults(data || [])
+
+      console.log(`Customers loaded: ${data?.length || 0} (page ${currentPage + 1})`)
+      
+      // Check if there are more items to load
+      setHasMoreCustomers((data?.length || 0) === CUSTOMERS_PER_PAGE)
+
+      if (reset) {
+        setSearchResults(data || [])
+        setCustomerPage(1)
+      } else {
+        setSearchResults(prev => [...prev, ...(data || [])])
+        setCustomerPage(prev => prev + 1)
+      }
     } catch (error: any) {
-      console.error('Error searching customers:', error)
-      Alert.alert('Error', 'Failed to search customers')
+      console.error('Error loading customers:', error)
+      if (reset) {
+        Alert.alert('Error', 'Failed to load customers')
+        setSearchResults([])
+      }
     } finally {
       setSearchingCustomers(false)
+      setLoadingMoreCustomers(false)
     }
   }
 
+  // Load more customers when scrolling
+  const loadMoreCustomers = () => {
+    if (!loadingMoreCustomers && hasMoreCustomers && !searchingCustomers) {
+      loadCustomers(false, searchQuery)
+    }
+  }
+
+  // Search customers by first name, last name, phone, email, or customer number
+  const searchCustomers = async (query: string) => {
+    if (!currentStore) {
+      setSearchResults([])
+      return
+    }
+
+    // Load customers with search term
+    await loadCustomers(true, query)
+  }
+
+  // Load all customers when modal opens
+  useEffect(() => {
+    if (showCustomerSearch && currentStore) {
+      // Load all customers initially when modal opens
+      loadCustomers(true, '')
+    } else if (!showCustomerSearch) {
+      // Reset when modal closes
+      setSearchResults([])
+      setSearchQuery('')
+      setCustomerPage(0)
+      setHasMoreCustomers(true)
+    }
+  }, [showCustomerSearch, currentStore])
+
   // Debounce search
   useEffect(() => {
+    if (!showCustomerSearch) return
+
     const timer = setTimeout(() => {
-      if (searchQuery) {
+      if (searchQuery.trim().length >= 2) {
         searchCustomers(searchQuery)
-      } else {
-        setSearchResults([])
+      } else if (searchQuery.trim().length === 0) {
+        // If search is cleared, reload all customers
+        loadCustomers(true, '')
       }
     }, 300)
 
     return () => clearTimeout(timer)
-  }, [searchQuery])
+  }, [searchQuery, showCustomerSearch])
 
   // Create new customer
   const handleCreateCustomer = async () => {
@@ -799,11 +869,24 @@ const POSScreen: React.FC = () => {
               {searchingCustomers && <ActivityIndicator size="small" color="#3b82f6" />}
             </View>
 
-            <ScrollView style={styles.searchResults}>
-              {searchResults.length === 0 && searchQuery.length >= 2 && !searchingCustomers ? (
+            <ScrollView 
+              style={styles.searchResults}
+              onScroll={(event: any) => {
+                const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent
+                const paddingToBottom = 20
+                const isCloseToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom
+                if (isCloseToBottom && hasMoreCustomers && !loadingMoreCustomers && !searchingCustomers) {
+                  loadMoreCustomers()
+                }
+              }}
+              scrollEventThrottle={400}
+            >
+              {searchResults.length === 0 && !searchingCustomers ? (
                 <View style={styles.emptySearch}>
                   <Ionicons name="search-outline" size={48} color="#d1d5db" />
-                  <Text style={styles.emptySearchText}>No customers found</Text>
+                  <Text style={styles.emptySearchText}>
+                    {searchQuery.length >= 2 ? 'No customers found' : 'No customers available'}
+                  </Text>
                   <TouchableOpacity 
                     style={styles.createNewButton}
                     onPress={() => {
@@ -815,29 +898,42 @@ const POSScreen: React.FC = () => {
                   </TouchableOpacity>
                 </View>
               ) : (
-                searchResults.map((customer) => (
-                  <TouchableOpacity
-                    key={customer.id}
-                    style={styles.customerResultItem}
-                    onPress={() => selectCustomer(customer)}
-                  >
-                    <View style={styles.customerResultIcon}>
-                      <Ionicons name="person" size={24} color="#3b82f6" />
+                <>
+                  {searchResults.map((customer) => (
+                    <TouchableOpacity
+                      key={customer.id}
+                      style={styles.customerResultItem}
+                      onPress={() => selectCustomer(customer)}
+                    >
+                      <View style={styles.customerResultIcon}>
+                        <Ionicons name="person" size={24} color="#3b82f6" />
+                      </View>
+                      <View style={styles.customerResultInfo}>
+                        <Text style={styles.customerResultName}>
+                          {customer.first_name} {customer.last_name}
+                        </Text>
+                        <Text style={styles.customerResultDetails}>
+                          {customer.customer_number} • {customer.loyalty_points} pts
+                        </Text>
+                        {customer.phone && (
+                          <Text style={styles.customerResultPhone}>{customer.phone}</Text>
+                        )}
+                      </View>
+                      <Ionicons name="chevron-forward" size={20} color="#d1d5db" />
+                    </TouchableOpacity>
+                  ))}
+                  {loadingMoreCustomers && (
+                    <View style={styles.loadingMoreContainer}>
+                      <ActivityIndicator size="small" color="#3b82f6" />
+                      <Text style={styles.loadingMoreText}>Loading more customers...</Text>
                     </View>
-                    <View style={styles.customerResultInfo}>
-                      <Text style={styles.customerResultName}>
-                        {customer.first_name} {customer.last_name}
-                      </Text>
-                      <Text style={styles.customerResultDetails}>
-                        {customer.customer_number} • {customer.loyalty_points} pts
-                      </Text>
-                      {customer.phone && (
-                        <Text style={styles.customerResultPhone}>{customer.phone}</Text>
-                      )}
+                  )}
+                  {!hasMoreCustomers && searchResults.length > 0 && (
+                    <View style={styles.endOfListContainer}>
+                      <Text style={styles.endOfListText}>No more customers to load</Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={20} color="#d1d5db" />
-                  </TouchableOpacity>
-                ))
+                  )}
+                </>
               )}
             </ScrollView>
           </View>
@@ -1534,30 +1630,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    marginBottom: 24,
   },
   paymentMethodButton: {
     width: '48%', // Approximately half width to fit 2 per row
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    borderWidth: 2,
+    borderColor: '#e5e7eb',
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
   },
   paymentMethodSelected: {
+    backgroundColor: '#dbeafe',
     borderColor: '#3b82f6',
-    backgroundColor: '#eff6ff',
   },
   paymentMethodIcon: {
     marginRight: 4,
   },
   paymentMethodText: {
     fontSize: 14,
+    fontWeight: '600',
     color: '#6b7280',
-    fontWeight: '500',
   },
   paymentMethodTextSelected: {
     color: '#3b82f6',
@@ -1699,6 +1797,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     color: '#ffffff',
+  },
+  loadingMoreContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    gap: 8,
+  },
+  loadingMoreText: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  endOfListContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  endOfListText: {
+    fontSize: 14,
+    color: '#9ca3af',
+    fontStyle: 'italic',
   },
   customerResultItem: {
     flexDirection: 'row',

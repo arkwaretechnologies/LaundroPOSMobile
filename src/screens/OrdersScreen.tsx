@@ -872,21 +872,13 @@ export default function OrdersScreen() {
         transparent={false}
         onRequestClose={() => setShowQRScanner(false)}
       >
-        {showQRScanner && (
-          <QRScanner
-            key={showQRScanner ? 'scanner-active' : 'scanner-inactive'}
-            onScan={(qrData: string) => {
-              console.log('📱 QR Scanner callback received:', qrData)
-              // Since QR code now only contains order number, use it directly
-              if (qrData && qrData.trim()) {
-                handleQRScan(qrData)
-              }
-            }}
-            onClose={() => {
-              setShowQRScanner(false)
-            }}
-          />
-        )}
+        <QRScanner
+          onScan={(qrData: string) => {
+            // Since QR code now only contains order number, use it directly
+            handleQRScan(qrData)
+          }}
+          onClose={() => setShowQRScanner(false)}
+        />
       </Modal>
     </View>
   )

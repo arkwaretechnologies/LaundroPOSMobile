@@ -325,16 +325,28 @@ class POSTerminalPrinterService {
         await this.setPrinterPrintAlignment(0) // 0 = left
         await new Promise(resolve => setTimeout(resolve, 100)) // Small delay
 
-        // Step 6: Add extra spacing after QR code for manual tearing (printer has no cutter)
-        console.log('📄 Adding extra spacing after QR code for manual tear...')
+        // Step 6: Add 5 blank lines after QR code
+        console.log('📄 Adding 5 blank lines after QR code...')
+        await POSTerminalPrinter.printerFeedLines(5)
+        await new Promise(resolve => setTimeout(resolve, 100)) // Small delay
+
+        // Step 7: Print 2 lines of dashed lines
+        console.log('📄 Printing 2 lines of dashed lines...')
+        const dashedLine = '--------------------------------\n'
+        await POSTerminalPrinter.printText(dashedLine)
+        await POSTerminalPrinter.printText(dashedLine)
+        await new Promise(resolve => setTimeout(resolve, 100)) // Small delay
+
+        // Step 8: Add extra spacing after dashed lines for manual tearing (printer has no cutter)
+        console.log('📄 Adding extra spacing after dashed lines for manual tear...')
         await POSTerminalPrinter.printerFeedLines(40)
         await new Promise(resolve => setTimeout(resolve, 200)) // Delay after feed lines
 
-        // Step 7: Wait a moment for all operations to complete
+        // Step 9: Wait a moment for all operations to complete
         console.log('⏳ Waiting for all buffered operations to complete...')
         await new Promise(resolve => setTimeout(resolve, 500)) // Wait 500ms
 
-        // Step 8: Check printer status and ensure it's ready (must be PRINTER_NORMAL = 0)
+        // Step 10: Check printer status and ensure it's ready (must be PRINTER_NORMAL = 0)
         let status = -1
         let retries = 0
         const maxRetries = 10
@@ -378,7 +390,7 @@ class POSTerminalPrinterService {
           return false
         }
 
-        // Step 9: Execute all buffered content with extra feed for manual tearing
+        // Step 11: Execute all buffered content with extra feed for manual tearing
         console.log('🖨️ Executing all buffered content and feeding paper for manual tear...')
         console.log(`📊 Printer status confirmed: ${status} (PRINTER_NORMAL)`)
         

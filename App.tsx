@@ -10,6 +10,7 @@ import OrdersScreen from './src/screens/OrdersScreen'
 import ReportsScreen from './src/screens/ReportsScreen'
 import SettingsScreen from './src/screens/SettingsScreen'
 import ServicesManagementScreen from './src/screens/ServicesManagementScreen'
+import PaymentMethodsScreen from './src/screens/PaymentMethodsScreen'
 import InventoryScreen from './src/screens/InventoryScreen'
 import BottomNavigation from './src/components/BottomNavigation'
 import { StoreProvider, useStore } from './src/context/StoreContext'
@@ -218,6 +219,9 @@ export default function App() {
     // If a specific screen is set, render that screen
     if (currentScreen === 'ServicesManagement') {
       return <ServicesManagementScreen navigation={navigation} />
+    }
+    if (currentScreen === 'PaymentMethods') {
+      return <PaymentMethodsScreen navigation={navigation} />
     }
 
     // Otherwise render the tab screen

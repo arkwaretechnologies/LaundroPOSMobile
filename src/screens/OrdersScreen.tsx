@@ -8,6 +8,7 @@ import ThermalPrinterService from '../services/ThermalPrinterService'
 import QRCodeDisplay from '../components/QRCodeDisplay'
 import QRScanner from '../components/QRScanner'
 import { useNotifications } from '../context/NotificationContext'
+import { PaymentMethod } from '../types/paymentMethod'
 
 interface OrderItem {
   id: string
@@ -67,7 +68,8 @@ export default function OrdersScreen() {
   // Payment modal
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [paymentAmount, setPaymentAmount] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'gcash' | 'paymaya'>('cash')
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
+  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null)
   
   // Print functionality
   const [printerService] = useState(ThermalPrinterService.getInstance())
@@ -82,6 +84,7 @@ export default function OrdersScreen() {
       setOrders([])
       setFilteredOrders([])
       loadOrders()
+      loadPaymentMethods()
     } else {
       // Clear orders if no store is selected
       setOrders([])
@@ -156,7 +159,45 @@ export default function OrdersScreen() {
   const onRefresh = async () => {
     setRefreshing(true)
     await loadOrders()
+    await loadPaymentMethods()
     setRefreshing(false)
+  }
+
+  const loadPaymentMethods = async () => {
+    if (!currentStore) {
+      console.log('No current store, skipping payment methods load')
+      return
+    }
+
+    try {
+      console.log('Loading payment methods from database...')
+      
+      // Load both global payment methods (store_id is NULL) AND this store's custom payment methods
+      const { data, error } = await supabase
+        .from('payment_methods')
+        .select('*')
+        .or(`store_id.is.null,store_id.eq.${currentStore.id}`)
+        .eq('is_active', true) // Only load active payment methods
+        .order('store_id', { ascending: true, nullsFirst: true }) // Global first
+        .order('sort_order', { ascending: true })
+
+      if (error) {
+        console.error('Payment methods query error:', error)
+        throw error
+      }
+      
+      console.log('Payment methods loaded:', data?.length || 0, 'methods')
+      setPaymentMethods(data || [])
+      
+      // Set default selected payment method (first active method)
+      if (data && data.length > 0) {
+        setSelectedPaymentMethodId(data[0].id)
+      }
+    } catch (error: any) {
+      console.error('Error loading payment methods:', error)
+      // Fallback to default payment methods if database fails
+      Alert.alert('Warning', 'Could not load payment methods. Using default methods.')
+    }
   }
 
   const applyFilters = () => {
@@ -369,13 +410,19 @@ export default function OrdersScreen() {
       const newBalance = selectedOrder.total_amount - newPaidAmount
       const newPaymentStatus = newBalance === 0 ? 'paid' : 'partial'
 
+      const selectedMethod = paymentMethods.find(m => m.id === selectedPaymentMethodId)
+      if (!selectedMethod) {
+        Alert.alert('Error', 'Please select a payment method')
+        return
+      }
+
       // Create payment record (only after validation passes)
       const { error: paymentError } = await supabase
         .from('payments')
         .insert({
           order_id: selectedOrder.id,
           amount: amount,
-          payment_method: paymentMethod,
+          payment_method: selectedMethod.name, // Store the method name for backward compatibility
           received_by: user.id,
           notes: 'Additional payment',
         })
@@ -403,7 +450,10 @@ export default function OrdersScreen() {
       
       setShowPaymentModal(false)
       setPaymentAmount('')
-      setPaymentMethod('cash')
+      // Reset to first payment method
+      if (paymentMethods.length > 0) {
+        setSelectedPaymentMethodId(paymentMethods[0].id)
+      }
       loadOrders()
     } catch (error: any) {
       console.error('Error adding payment:', error)
@@ -832,25 +882,37 @@ export default function OrdersScreen() {
                   />
 
                   <Text style={styles.inputLabel}>Payment Method</Text>
-                  <View style={styles.paymentMethods}>
-                    {(['cash', 'card', 'gcash', 'paymaya'] as const).map(method => (
-                      <TouchableOpacity
-                        key={method}
-                        style={[
-                          styles.paymentMethodButton,
-                          paymentMethod === method && styles.paymentMethodButtonActive
-                        ]}
-                        onPress={() => setPaymentMethod(method)}
-                      >
-                        <Text style={[
-                          styles.paymentMethodText,
-                          paymentMethod === method && styles.paymentMethodTextActive
-                        ]}>
-                          {method.toUpperCase()}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+                  {paymentMethods.length === 0 ? (
+                    <Text style={styles.noPaymentMethodsText}>No payment methods available. Please configure payment methods in Settings.</Text>
+                  ) : (
+                    <View style={styles.paymentMethods}>
+                      {paymentMethods.map(method => (
+                        <TouchableOpacity
+                          key={method.id}
+                          style={[
+                            styles.paymentMethodButton,
+                            selectedPaymentMethodId === method.id && styles.paymentMethodButtonActive
+                          ]}
+                          onPress={() => setSelectedPaymentMethodId(method.id)}
+                        >
+                          {method.icon && (
+                            <Ionicons 
+                              name={method.icon as any} 
+                              size={18} 
+                              color={selectedPaymentMethodId === method.id ? '#3b82f6' : '#6b7280'} 
+                              style={styles.paymentMethodIcon}
+                            />
+                          )}
+                          <Text style={[
+                            styles.paymentMethodText,
+                            selectedPaymentMethodId === method.id && styles.paymentMethodTextActive
+                          ]}>
+                            {method.display_name}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
 
                   <TouchableOpacity
                     style={styles.submitButton}
@@ -1320,10 +1382,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3f4f6',
     borderWidth: 2,
     borderColor: '#e5e7eb',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginRight: 8,
+    marginBottom: 8,
   },
   paymentMethodButtonActive: {
     backgroundColor: '#dbeafe',
     borderColor: '#3b82f6',
+  },
+  paymentMethodIcon: {
+    marginRight: 4,
   },
   paymentMethodText: {
     fontSize: 14,
@@ -1332,6 +1403,16 @@ const styles = StyleSheet.create({
   },
   paymentMethodTextActive: {
     color: '#3b82f6',
+    fontWeight: '700',
+  },
+  noPaymentMethodsText: {
+    fontSize: 14,
+    color: '#ef4444',
+    textAlign: 'center',
+    padding: 16,
+    backgroundColor: '#fee2e2',
+    borderRadius: 8,
+    marginBottom: 16,
   },
   submitButton: {
     backgroundColor: '#10b981',

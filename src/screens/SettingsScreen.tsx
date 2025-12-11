@@ -85,7 +85,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
         { icon: 'receipt', title: 'Receipt Settings', subtitle: 'Print and email options', color: '#8b5cf6' },
         { icon: 'print', title: 'Printer Configuration', subtitle: 'Setup and select printer', color: '#8b5cf6', action: 'printer' },
         { icon: 'time', title: 'Business Hours', subtitle: 'Operating schedule', color: '#06b6d4' },
-        { icon: 'card', title: 'Payment Methods', subtitle: 'Accept payment types', color: '#ef4444' },
+        { icon: 'card', title: 'Payment Methods', subtitle: 'Accept payment types', color: '#ef4444', action: 'paymentMethods' },
       ]
     },
     {
@@ -127,6 +127,8 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   const handleSettingPress = (item: any) => {
     if (item.action === 'services' && navigation) {
       navigation.navigate('ServicesManagement')
+    } else if (item.action === 'paymentMethods' && navigation) {
+      navigation.navigate('PaymentMethods')
     } else if (item.action === 'printer') {
       setShowPrinterConfig(true)
     } else if (item.action === 'switchStore') {

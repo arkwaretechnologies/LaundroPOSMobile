@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 import { isFeatureEnabled } from '../utils/featureFlags'
+import { PaymentMethod } from '../types/paymentMethod'
 
 interface Service {
   id: string
@@ -74,11 +75,13 @@ const POSScreen: React.FC = () => {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [paymentType, setPaymentType] = useState<'full' | 'partial' | 'later'>('full')
   const [partialAmount, setPartialAmount] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'gcash' | 'paymaya'>('cash')
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
+  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null)
 
   // Load services and inventory from database
   useEffect(() => {
     loadServices()
+    loadPaymentMethods()
     // Only load inventory if the feature is enabled
     if (isFeatureEnabled(currentStore as any, 'inventory_tracking')) {
       loadInventoryItems()
@@ -165,6 +168,43 @@ const POSScreen: React.FC = () => {
     } catch (error: any) {
       console.error('Error loading inventory:', error)
       // Don't show alert for inventory - it's optional feature
+    }
+  }
+
+  const loadPaymentMethods = async () => {
+    if (!currentStore) {
+      console.log('No current store, skipping payment methods load')
+      return
+    }
+
+    try {
+      console.log('Loading payment methods from database...')
+      
+      // Load both global payment methods (store_id is NULL) AND this store's custom payment methods
+      const { data, error } = await supabase
+        .from('payment_methods')
+        .select('*')
+        .or(`store_id.is.null,store_id.eq.${currentStore.id}`)
+        .eq('is_active', true) // Only load active payment methods
+        .order('store_id', { ascending: true, nullsFirst: true }) // Global first
+        .order('sort_order', { ascending: true })
+
+      if (error) {
+        console.error('Payment methods query error:', error)
+        throw error
+      }
+      
+      console.log('Payment methods loaded:', data?.length || 0, 'methods')
+      setPaymentMethods(data || [])
+      
+      // Set default selected payment method (first active method)
+      if (data && data.length > 0) {
+        setSelectedPaymentMethodId(data[0].id)
+      }
+    } catch (error: any) {
+      console.error('Error loading payment methods:', error)
+      // Fallback to default payment methods if database fails
+      Alert.alert('Warning', 'Could not load payment methods. Using default methods.')
     }
   }
 
@@ -465,12 +505,17 @@ const POSScreen: React.FC = () => {
 
       // Create payment record if amount was paid
       if (amountPaid > 0) {
+        const selectedMethod = paymentMethods.find(m => m.id === selectedPaymentMethodId)
+        if (!selectedMethod) {
+          throw new Error('No payment method selected')
+        }
+
         const { error: paymentError } = await supabase
           .from('payments')
           .insert({
             order_id: orderData.id,
             amount: amountPaid,
-            payment_method: paymentMethod,
+            payment_method: selectedMethod.name, // Store the method name for backward compatibility
             received_by: user.id,
             notes: `Initial ${paymentType} payment`,
           })
@@ -493,7 +538,10 @@ const POSScreen: React.FC = () => {
               setShowPaymentModal(false)
               setPartialAmount('')
               setPaymentType('full')
-              setPaymentMethod('cash')
+              // Reset to first payment method
+              if (paymentMethods.length > 0) {
+                setSelectedPaymentMethodId(paymentMethods[0].id)
+              }
             }
           }
         ]
@@ -981,19 +1029,37 @@ const POSScreen: React.FC = () => {
             {/* Payment Method Selection */}
             <View style={styles.paymentSection}>
               <Text style={styles.paymentSectionTitle}>Payment Method</Text>
-              <View style={styles.paymentMethods}>
-                {['cash', 'card', 'gcash', 'paymaya'].map((method) => (
-                  <TouchableOpacity
-                    key={method}
-                    style={[styles.paymentMethodButton, paymentMethod === method && styles.paymentMethodSelected]}
-                    onPress={() => setPaymentMethod(method as any)}
-                  >
-                    <Text style={[styles.paymentMethodText, paymentMethod === method && styles.paymentMethodTextSelected]}>
-                      {method.charAt(0).toUpperCase() + method.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-            </View>
+              {paymentMethods.length === 0 ? (
+                <Text style={styles.noPaymentMethodsText}>No payment methods available. Please configure payment methods in Settings.</Text>
+              ) : (
+                <View style={styles.paymentMethods}>
+                  {paymentMethods.map((method) => (
+                    <TouchableOpacity
+                      key={method.id}
+                      style={[
+                        styles.paymentMethodButton, 
+                        selectedPaymentMethodId === method.id && styles.paymentMethodSelected
+                      ]}
+                      onPress={() => setSelectedPaymentMethodId(method.id)}
+                    >
+                      {method.icon && (
+                        <Ionicons 
+                          name={method.icon as any} 
+                          size={18} 
+                          color={selectedPaymentMethodId === method.id ? '#3b82f6' : '#6b7280'} 
+                          style={styles.paymentMethodIcon}
+                        />
+                      )}
+                      <Text style={[
+                        styles.paymentMethodText, 
+                        selectedPaymentMethodId === method.id && styles.paymentMethodTextSelected
+                      ]}>
+                        {method.display_name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
 
             {/* Balance Due */}
@@ -1466,20 +1532,27 @@ const styles = StyleSheet.create({
   },
   paymentMethods: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
   paymentMethodButton: {
-    flex: 1,
+    width: '48%', // Approximately half width to fit 2 per row
     paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#d1d5db',
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
   },
   paymentMethodSelected: {
     borderColor: '#3b82f6',
     backgroundColor: '#eff6ff',
+  },
+  paymentMethodIcon: {
+    marginRight: 4,
   },
   paymentMethodText: {
     fontSize: 14,
@@ -1488,6 +1561,15 @@ const styles = StyleSheet.create({
   },
   paymentMethodTextSelected: {
     color: '#3b82f6',
+    fontWeight: '600',
+  },
+  noPaymentMethodsText: {
+    fontSize: 14,
+    color: '#ef4444',
+    textAlign: 'center',
+    padding: 16,
+    backgroundColor: '#fee2e2',
+    borderRadius: 8,
   },
   balanceSection: {
     flexDirection: 'row',

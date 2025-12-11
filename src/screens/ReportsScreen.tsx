@@ -1,79 +1,1199 @@
-import React from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native'
+import React, { useState, useEffect } from 'react'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Modal, Alert, Platform } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import RNFS from 'react-native-fs'
+import { supabase } from '../../lib/supabase'
+import { useStore } from '../context/StoreContext'
+import * as Print from 'expo-print'
+import * as Sharing from 'expo-sharing'
+
+interface ReportStats {
+  dailySales: number
+  weeklySales: number
+  monthlySales: number
+  totalOrders: number
+  avgOrderValue: number
+  customerCount: number
+  dailyChange: number
+  weeklyChange: number
+  monthlyChange: number
+  ordersChange: number
+  avgOrderChange: number
+  customerChange: number
+}
+
+interface ReportData {
+  salesReport?: any
+  orderSummary?: any
+  customerAnalytics?: any
+  servicePerformance?: any
+  revenueTrends?: any
+}
 
 const ReportsScreen: React.FC = () => {
+  const { currentStore } = useStore()
+  const insets = useSafeAreaInsets()
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [selectedReport, setSelectedReport] = useState<string | null>(null)
+  const [reportData, setReportData] = useState<ReportData>({})
+  const [reportLoading, setReportLoading] = useState(false)
+  const [stats, setStats] = useState<ReportStats>({
+    dailySales: 0,
+    weeklySales: 0,
+    monthlySales: 0,
+    totalOrders: 0,
+    avgOrderValue: 0,
+    customerCount: 0,
+    dailyChange: 0,
+    weeklyChange: 0,
+    monthlyChange: 0,
+    ordersChange: 0,
+    avgOrderChange: 0,
+    customerChange: 0,
+  })
+
+  useEffect(() => {
+    if (currentStore) {
+      loadReportData()
+    }
+  }, [currentStore])
+
+  const loadReportData = async () => {
+    if (!currentStore) return
+
+    try {
+      setLoading(true)
+
+      const now = new Date()
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      const yesterday = new Date(today)
+      yesterday.setDate(yesterday.getDate() - 1)
+      
+      const weekStart = new Date(today)
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay()) // Start of week (Sunday)
+      const lastWeekStart = new Date(weekStart)
+      lastWeekStart.setDate(lastWeekStart.getDate() - 7)
+      const lastWeekEnd = new Date(weekStart)
+      lastWeekEnd.setDate(lastWeekEnd.getDate() - 1)
+      
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0)
+
+      // Fetch today's orders
+      const { data: todayOrders, error: todayError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount')
+        .eq('store_id', currentStore.id)
+        .gte('order_date', today.toISOString())
+        .lt('order_date', new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString())
+
+      if (todayError) throw todayError
+
+      // Fetch yesterday's orders
+      const { data: yesterdayOrders, error: yesterdayError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount')
+        .eq('store_id', currentStore.id)
+        .gte('order_date', yesterday.toISOString())
+        .lt('order_date', today.toISOString())
+
+      if (yesterdayError) throw yesterdayError
+
+      // Fetch this week's orders
+      const { data: weekOrders, error: weekError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount')
+        .eq('store_id', currentStore.id)
+        .gte('order_date', weekStart.toISOString())
+        .lt('order_date', new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString())
+
+      if (weekError) throw weekError
+
+      // Fetch last week's orders
+      const { data: lastWeekOrders, error: lastWeekError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount')
+        .eq('store_id', currentStore.id)
+        .gte('order_date', lastWeekStart.toISOString())
+        .lt('order_date', lastWeekEnd.toISOString())
+
+      if (lastWeekError) throw lastWeekError
+
+      // Fetch this month's orders
+      const { data: monthOrders, error: monthError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount')
+        .eq('store_id', currentStore.id)
+        .gte('order_date', monthStart.toISOString())
+
+      if (monthError) throw monthError
+
+      // Fetch last month's orders
+      const { data: lastMonthOrders, error: lastMonthError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount')
+        .eq('store_id', currentStore.id)
+        .gte('order_date', lastMonthStart.toISOString())
+        .lt('order_date', monthStart.toISOString())
+
+      if (lastMonthError) throw lastMonthError
+
+      // Fetch all orders for total orders and avg order value
+      const { data: allOrders, error: allOrdersError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount, order_date')
+        .eq('store_id', currentStore.id)
+
+      if (allOrdersError) throw allOrdersError
+
+      // Fetch previous period orders for comparison (30 days ago)
+      const thirtyDaysAgo = new Date(today)
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+      const sixtyDaysAgo = new Date(today)
+      sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60)
+
+      const { data: previousOrders, error: previousOrdersError } = await supabase
+        .from('orders')
+        .select('total_amount, paid_amount, order_date')
+        .eq('store_id', currentStore.id)
+        .gte('order_date', sixtyDaysAgo.toISOString())
+        .lt('order_date', thirtyDaysAgo.toISOString())
+
+      if (previousOrdersError) throw previousOrdersError
+
+      // Fetch customer count
+      const { count: customerCount, error: customerError } = await supabase
+        .from('customers')
+        .select('*', { count: 'exact', head: true })
+        .eq('store_id', currentStore.id)
+        .eq('is_active', true)
+
+      if (customerError) throw customerError
+
+      // Fetch previous customer count (30 days ago)
+      const { count: previousCustomerCount, error: previousCustomerError } = await supabase
+        .from('customers')
+        .select('*', { count: 'exact', head: true })
+        .eq('store_id', currentStore.id)
+        .eq('is_active', true)
+        .lt('created_at', thirtyDaysAgo.toISOString())
+
+      if (previousCustomerError) throw previousCustomerError
+
+      // Calculate sales
+      const dailySales = todayOrders?.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0) || 0
+      const yesterdaySales = yesterdayOrders?.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0) || 0
+      const weeklySales = weekOrders?.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0) || 0
+      const lastWeekSales = lastWeekOrders?.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0) || 0
+      const monthlySales = monthOrders?.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0) || 0
+      const lastMonthSales = lastMonthOrders?.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0) || 0
+
+      // Calculate total orders
+      const totalOrders = allOrders?.length || 0
+      const previousTotalOrders = previousOrders?.length || 0
+
+      // Calculate average order value
+      const totalSales = allOrders?.reduce((sum, o) => sum + Number(o.total_amount || 0), 0) || 0
+      const avgOrderValue = totalOrders > 0 ? totalSales / totalOrders : 0
+      const previousTotalSales = previousOrders?.reduce((sum, o) => sum + Number(o.total_amount || 0), 0) || 0
+      const previousAvgOrderValue = previousTotalOrders > 0 ? previousTotalSales / previousTotalOrders : 0
+
+      // Calculate percentage changes
+      const calculateChange = (current: number, previous: number): number => {
+        if (previous === 0) return current > 0 ? 100 : 0
+        return ((current - previous) / previous) * 100
+      }
+
+      const dailyChange = calculateChange(dailySales, yesterdaySales)
+      const weeklyChange = calculateChange(weeklySales, lastWeekSales)
+      const monthlyChange = calculateChange(monthlySales, lastMonthSales)
+      const ordersChange = calculateChange(totalOrders, previousTotalOrders)
+      const avgOrderChange = calculateChange(avgOrderValue, previousAvgOrderValue)
+      const customerChange = calculateChange(customerCount || 0, previousCustomerCount || 0)
+
+      setStats({
+        dailySales,
+        weeklySales,
+        monthlySales,
+        totalOrders,
+        avgOrderValue,
+        customerCount: customerCount || 0,
+        dailyChange,
+        weeklyChange,
+        monthlyChange,
+        ordersChange,
+        avgOrderChange,
+        customerChange,
+      })
+    } catch (error: any) {
+      console.error('Error loading report data:', error)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  const onRefresh = async () => {
+    setRefreshing(true)
+    await loadReportData()
+  }
+
+  const formatCurrency = (amount: number) => {
+    return `₱${amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
+  }
+
+  const formatNumber = (num: number) => {
+    return num.toLocaleString()
+  }
+
+  const formatChange = (change: number) => {
+    const sign = change >= 0 ? '+' : ''
+    return `${sign}${change.toFixed(0)}%`
+  }
+
   const reportCards = [
     {
       id: 1,
       title: 'Daily Sales',
-      value: '₱2,450',
-      change: '+12%',
-      changeType: 'positive',
+      value: formatCurrency(stats.dailySales),
+      change: formatChange(stats.dailyChange),
+      changeType: stats.dailyChange >= 0 ? 'positive' : 'negative',
       icon: 'trending-up',
       color: '#10b981'
     },
     {
       id: 2,
       title: 'Weekly Sales',
-      value: '₱15,230',
-      change: '+8%',
-      changeType: 'positive',
+      value: formatCurrency(stats.weeklySales),
+      change: formatChange(stats.weeklyChange),
+      changeType: stats.weeklyChange >= 0 ? 'positive' : 'negative',
       icon: 'bar-chart',
       color: '#3b82f6'
     },
     {
       id: 3,
       title: 'Monthly Sales',
-      value: '₱58,900',
-      change: '-3%',
-      changeType: 'negative',
+      value: formatCurrency(stats.monthlySales),
+      change: formatChange(stats.monthlyChange),
+      changeType: stats.monthlyChange >= 0 ? 'positive' : 'negative',
       icon: 'calendar',
       color: '#f59e0b'
     },
     {
       id: 4,
       title: 'Total Orders',
-      value: '1,245',
-      change: '+15%',
-      changeType: 'positive',
+      value: formatNumber(stats.totalOrders),
+      change: formatChange(stats.ordersChange),
+      changeType: stats.ordersChange >= 0 ? 'positive' : 'negative',
       icon: 'list',
       color: '#8b5cf6'
     },
     {
       id: 5,
       title: 'Avg Order Value',
-      value: '₱47.30',
-      change: '+5%',
-      changeType: 'positive',
+      value: formatCurrency(stats.avgOrderValue),
+      change: formatChange(stats.avgOrderChange),
+      changeType: stats.avgOrderChange >= 0 ? 'positive' : 'negative',
       icon: 'cash',
       color: '#06b6d4'
     },
     {
       id: 6,
       title: 'Customer Count',
-      value: '856',
-      change: '+22%',
-      changeType: 'positive',
+      value: formatNumber(stats.customerCount),
+      change: formatChange(stats.customerChange),
+      changeType: stats.customerChange >= 0 ? 'positive' : 'negative',
       icon: 'people',
       color: '#ef4444'
     }
   ]
 
+  const loadReportDetails = async (reportId: string) => {
+    if (!currentStore) return
+
+    try {
+      setReportLoading(true)
+      setSelectedReport(reportId)
+
+      switch (reportId) {
+        case 'sales':
+          await loadSalesReport()
+          break
+        case 'orders':
+          await loadOrderSummary()
+          break
+        case 'customers':
+          await loadCustomerAnalytics()
+          break
+        case 'services':
+          await loadServicePerformance()
+          break
+        case 'revenue':
+          await loadRevenueTrends()
+          break
+        case 'export':
+          handleExportData()
+          return
+      }
+    } catch (error: any) {
+      console.error('Error loading report:', error)
+      Alert.alert('Error', 'Failed to load report data')
+    } finally {
+      setReportLoading(false)
+    }
+  }
+
+  const loadSalesReport = async () => {
+    if (!currentStore) return
+
+    const now = new Date()
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+
+    // Get orders for this store first
+    const { data: storeOrders, error: ordersError } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('store_id', currentStore.id)
+
+    if (ordersError) throw ordersError
+
+    const orderIds = storeOrders?.map(o => o.id) || []
+
+    if (orderIds.length === 0) {
+      setReportData({
+        ...reportData,
+        salesReport: {
+          byMethod: {},
+          daily: {},
+          total: 0,
+        }
+      })
+      return
+    }
+
+    // Get payments for these orders
+    const { data: payments, error: paymentsError } = await supabase
+      .from('payments')
+      .select('amount, payment_method, payment_date, order_id')
+      .in('order_id', orderIds)
+      .gte('payment_date', monthStart.toISOString())
+
+    if (paymentsError) throw paymentsError
+
+    const storePayments = payments || []
+
+    // Group by payment method
+    const salesByMethod: Record<string, number> = {}
+    storePayments.forEach((payment: any) => {
+      const method = payment.payment_method || 'unknown'
+      salesByMethod[method] = (salesByMethod[method] || 0) + Number(payment.amount || 0)
+    })
+
+    // Get daily sales for last 7 days
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+
+    const { data: recentPayments, error: recentError } = await supabase
+      .from('payments')
+      .select('amount, payment_date, order_id')
+      .in('order_id', orderIds)
+      .gte('payment_date', sevenDaysAgo.toISOString())
+
+    if (recentError) throw recentError
+
+    const storeRecentPayments = recentPayments || []
+
+    const dailySales: Record<string, number> = {}
+    storeRecentPayments.forEach((payment: any) => {
+      const date = new Date(payment.payment_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      dailySales[date] = (dailySales[date] || 0) + Number(payment.amount || 0)
+    })
+
+    setReportData({
+      ...reportData,
+      salesReport: {
+        byMethod: salesByMethod,
+        daily: dailySales,
+        total: storePayments.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0),
+      }
+    })
+  }
+
+  const loadOrderSummary = async () => {
+    if (!currentStore) return
+
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('store_id', currentStore.id)
+
+    if (ordersError) throw ordersError
+
+    // Group by status
+    const byStatus: Record<string, number> = {}
+    const byPaymentStatus: Record<string, number> = {}
+    let totalRevenue = 0
+    let totalPaid = 0
+
+    orders?.forEach(order => {
+      byStatus[order.order_status] = (byStatus[order.order_status] || 0) + 1
+      byPaymentStatus[order.payment_status] = (byPaymentStatus[order.payment_status] || 0) + 1
+      totalRevenue += Number(order.total_amount || 0)
+      totalPaid += Number(order.paid_amount || 0)
+    })
+
+    setReportData({
+      ...reportData,
+      orderSummary: {
+        byStatus,
+        byPaymentStatus,
+        total: orders?.length || 0,
+        totalRevenue,
+        totalPaid,
+        outstanding: totalRevenue - totalPaid,
+      }
+    })
+  }
+
+  const loadCustomerAnalytics = async () => {
+    if (!currentStore) return
+
+    // Get all customers
+    const { data: customers, error: customersError } = await supabase
+      .from('customers')
+      .select('id, first_name, last_name, loyalty_points, created_at')
+      .eq('store_id', currentStore.id)
+      .eq('is_active', true)
+
+    if (customersError) throw customersError
+
+    // Get customer orders
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('customer_id, total_amount, paid_amount')
+      .eq('store_id', currentStore.id)
+      .not('customer_id', 'is', null)
+
+    if (ordersError) throw ordersError
+
+    // Calculate customer metrics
+    const customerStats: Record<string, { orders: number; totalSpent: number; avgOrder: number }> = {}
+    orders?.forEach(order => {
+      if (order.customer_id) {
+        if (!customerStats[order.customer_id]) {
+          customerStats[order.customer_id] = { orders: 0, totalSpent: 0, avgOrder: 0 }
+        }
+        customerStats[order.customer_id].orders += 1
+        customerStats[order.customer_id].totalSpent += Number(order.paid_amount || 0)
+      }
+    })
+
+    // Calculate averages
+    Object.keys(customerStats).forEach(customerId => {
+      const stats = customerStats[customerId]
+      stats.avgOrder = stats.orders > 0 ? stats.totalSpent / stats.orders : 0
+    })
+
+    // Top customers
+    const topCustomers = Object.entries(customerStats)
+      .map(([customerId, stats]) => {
+        const customer = customers?.find(c => c.id === customerId)
+        return {
+          id: customerId,
+          name: customer ? `${customer.first_name} ${customer.last_name}` : 'Unknown',
+          ...stats
+        }
+      })
+      .sort((a, b) => b.totalSpent - a.totalSpent)
+      .slice(0, 10)
+
+    // New customers this month
+    const monthStart = new Date()
+    monthStart.setDate(1)
+    const newCustomers = customers?.filter(c => new Date(c.created_at) >= monthStart).length || 0
+
+    setReportData({
+      ...reportData,
+      customerAnalytics: {
+        total: customers?.length || 0,
+        newThisMonth: newCustomers,
+        topCustomers,
+        avgLoyaltyPoints: customers?.reduce((sum, c) => sum + (c.loyalty_points || 0), 0) / (customers?.length || 1) || 0,
+      }
+    })
+  }
+
+  const loadServicePerformance = async () => {
+    if (!currentStore) return
+
+    // Get orders for this store
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('store_id', currentStore.id)
+
+    if (ordersError) throw ordersError
+
+    const orderIds = orders?.map(o => o.id) || []
+
+    if (orderIds.length === 0) {
+      setReportData({
+        ...reportData,
+        servicePerformance: {
+          topServices: [],
+          totalServices: 0,
+          totalRevenue: 0,
+        }
+      })
+      return
+    }
+
+    // Get order items for these orders
+    const { data: orderItems, error: itemsError } = await supabase
+      .from('order_items')
+      .select('service_name, quantity, total_price, service_id')
+      .in('order_id', orderIds)
+
+    if (itemsError) throw itemsError
+
+    // Group by service
+    const serviceStats: Record<string, { name: string; quantity: number; revenue: number; orders: number }> = {}
+    
+    orderItems?.forEach(item => {
+      const serviceName = item.service_name || 'Unknown Service'
+      if (!serviceStats[serviceName]) {
+        serviceStats[serviceName] = {
+          name: serviceName,
+          quantity: 0,
+          revenue: 0,
+          orders: 0
+        }
+      }
+      serviceStats[serviceName].quantity += item.quantity || 0
+      serviceStats[serviceName].revenue += Number(item.total_price || 0)
+      serviceStats[serviceName].orders += 1
+    })
+
+    // Convert to array and sort by revenue
+    const topServices = Object.values(serviceStats)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10)
+
+    setReportData({
+      ...reportData,
+      servicePerformance: {
+        topServices,
+        totalServices: Object.keys(serviceStats).length,
+        totalRevenue: topServices.reduce((sum, s) => sum + s.revenue, 0),
+      }
+    })
+  }
+
+  const loadRevenueTrends = async () => {
+    if (!currentStore) return
+
+    // Get last 30 days of payments
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+    // Get orders for this store first
+    const { data: storeOrders, error: ordersError } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('store_id', currentStore.id)
+
+    if (ordersError) throw ordersError
+
+    const orderIds = storeOrders?.map(o => o.id) || []
+
+    if (orderIds.length === 0) {
+      setReportData({
+        ...reportData,
+        revenueTrends: {
+          daily: {},
+          weekly: {},
+          weekLabels: [],
+          total: 0,
+        }
+      })
+      return
+    }
+
+    const { data: payments, error: paymentsError } = await supabase
+      .from('payments')
+      .select('amount, payment_date, order_id')
+      .in('order_id', orderIds)
+      .gte('payment_date', thirtyDaysAgo.toISOString())
+      .order('payment_date', { ascending: true })
+
+    if (paymentsError) throw paymentsError
+
+    const storePayments = payments || []
+
+    // Group by date
+    const dailyRevenue: Record<string, number> = {}
+    storePayments.forEach((payment: any) => {
+      const date = new Date(payment.payment_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      dailyRevenue[date] = (dailyRevenue[date] || 0) + Number(payment.amount || 0)
+    })
+
+    // Calculate weekly totals
+    const weeklyRevenue: Record<string, number> = {}
+    const weekLabels: string[] = []
+    const now = new Date()
+    
+    for (let i = 3; i >= 0; i--) {
+      const weekStart = new Date(now)
+      weekStart.setDate(weekStart.getDate() - (i * 7))
+      const weekEnd = new Date(weekStart)
+      weekEnd.setDate(weekEnd.getDate() + 6)
+      
+      const weekLabel = `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+      weekLabels.push(weekLabel)
+      
+      let weekTotal = 0
+      storePayments.forEach((payment: any) => {
+        const paymentDate = new Date(payment.payment_date)
+        if (paymentDate >= weekStart && paymentDate <= weekEnd) {
+          weekTotal += Number(payment.amount || 0)
+        }
+      })
+      weeklyRevenue[weekLabel] = weekTotal
+    }
+
+    setReportData({
+      ...reportData,
+      revenueTrends: {
+        daily: dailyRevenue,
+        weekly: weeklyRevenue,
+        weekLabels,
+        total: storePayments.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0),
+      }
+    })
+  }
+
+  const handleExportData = async () => {
+    if (!currentStore) {
+      Alert.alert('Error', 'No store selected')
+      return
+    }
+
+    try {
+      setReportLoading(true)
+      setSelectedReport('export')
+
+      // Load all report data if not already loaded
+      if (!reportData.salesReport) await loadSalesReport()
+      if (!reportData.orderSummary) await loadOrderSummary()
+      if (!reportData.customerAnalytics) await loadCustomerAnalytics()
+      if (!reportData.servicePerformance) await loadServicePerformance()
+      if (!reportData.revenueTrends) await loadRevenueTrends()
+
+      // Generate PDF HTML
+      const html = generatePDFHTML(stats, reportData, currentStore.name)
+
+      // Generate PDF
+      const { uri } = await Print.printToFileAsync({ html })
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
+      const sanitizedStoreName = currentStore.name.replace(/[^a-zA-Z0-9]/g, '_')
+      const filename = `Reports_${sanitizedStoreName}_${timestamp}.pdf`
+
+      // Determine save directory based on platform
+      const documentsPath = Platform.OS === 'ios' 
+        ? RNFS.DocumentDirectoryPath 
+        : (RNFS.DownloadDirectoryPath || RNFS.DocumentDirectoryPath)
+      
+      // Ensure directory exists
+      const dirExists = await RNFS.exists(documentsPath)
+      if (!dirExists) {
+        await RNFS.mkdir(documentsPath)
+      }
+      
+      const filePath = `${documentsPath}/${filename}`
+
+      // Copy PDF to permanent location
+      await RNFS.copyFile(uri, filePath)
+
+      // Verify file was saved
+      const fileExists = await RNFS.exists(filePath)
+      if (!fileExists) {
+        throw new Error('Failed to save file to device storage')
+      }
+
+      // Show success message with options
+      const locationDisplay = Platform.OS === 'android' 
+        ? 'Downloads folder' 
+        : 'Documents folder'
+      
+      Alert.alert(
+        'PDF Exported Successfully',
+        `Report saved as:\n${filename}\n\nSaved to: ${locationDisplay}`,
+        [
+          {
+            text: 'Share',
+            onPress: async () => {
+              try {
+                if (await Sharing.isAvailableAsync()) {
+                  await Sharing.shareAsync(filePath, {
+                    mimeType: 'application/pdf',
+                    dialogTitle: 'Share Report PDF',
+                  })
+                } else {
+                  Alert.alert('Info', 'Sharing is not available on this device')
+                }
+              } catch (shareError: any) {
+                Alert.alert('Error', `Failed to share file: ${shareError.message}`)
+              }
+            }
+          },
+          {
+            text: 'OK',
+            style: 'default'
+          }
+        ]
+      )
+
+      setSelectedReport(null)
+    } catch (error: any) {
+      console.error('Error exporting PDF:', error)
+      
+      // Check if it's a native module error
+      if (error.message?.includes('Cannot find native module') || 
+          error.message?.includes('ExpoPrint') ||
+          error.code === 'ERR_MODULE_NOT_FOUND') {
+        Alert.alert(
+          'Rebuild Required',
+          'The PDF export feature requires native modules. Please rebuild the app:\n\n' +
+          'Android: npx expo run:android\n' +
+          'iOS: npx expo run:ios\n\n' +
+          'Or create a new development build with EAS Build.',
+          [{ text: 'OK' }]
+        )
+      } else if (error.message?.includes('Failed to save file')) {
+        Alert.alert(
+          'Save Error',
+          `Failed to save PDF file:\n${error.message}\n\nPlease check storage permissions.`,
+          [{ text: 'OK' }]
+        )
+      } else {
+        Alert.alert('Error', `Failed to export PDF: ${error.message || 'Unknown error'}`)
+      }
+    } finally {
+      setReportLoading(false)
+    }
+  }
+
+  const generatePDFHTML = (stats: ReportStats, data: ReportData, storeName: string): string => {
+    const formatCurrency = (amount: number) => `₱${amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
+    const formatNumber = (num: number) => num.toLocaleString()
+    const formatChange = (change: number) => {
+      const sign = change >= 0 ? '+' : ''
+      return `${sign}${change.toFixed(0)}%`
+    }
+    const formatDate = (date: Date) => date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              margin: 20px;
+              color: #333;
+            }
+            .header {
+              text-align: center;
+              border-bottom: 3px solid #3b82f6;
+              padding-bottom: 20px;
+              margin-bottom: 30px;
+            }
+            .header h1 {
+              color: #111827;
+              margin: 0;
+              font-size: 28px;
+            }
+            .header p {
+              color: #6b7280;
+              margin: 5px 0;
+            }
+            .section {
+              margin-bottom: 30px;
+              page-break-inside: avoid;
+            }
+            .section-title {
+              background-color: #3b82f6;
+              color: white;
+              padding: 12px;
+              font-size: 18px;
+              font-weight: bold;
+              margin-bottom: 15px;
+              border-radius: 4px;
+            }
+            .stats-grid {
+              display: grid;
+              grid-template-columns: repeat(2, 1fr);
+              gap: 15px;
+              margin-bottom: 20px;
+            }
+            .stat-card {
+              border: 1px solid #e5e7eb;
+              border-radius: 8px;
+              padding: 15px;
+              background-color: #f9fafb;
+            }
+            .stat-label {
+              font-size: 12px;
+              color: #6b7280;
+              margin-bottom: 5px;
+            }
+            .stat-value {
+              font-size: 20px;
+              font-weight: bold;
+              color: #111827;
+            }
+            .stat-change {
+              font-size: 11px;
+              margin-top: 5px;
+            }
+            .positive { color: #10b981; }
+            .negative { color: #ef4444; }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 10px;
+            }
+            th {
+              background-color: #f3f4f6;
+              padding: 10px;
+              text-align: left;
+              border-bottom: 2px solid #e5e7eb;
+              font-weight: bold;
+              color: #111827;
+            }
+            td {
+              padding: 10px;
+              border-bottom: 1px solid #e5e7eb;
+            }
+            tr:last-child td {
+              border-bottom: none;
+            }
+            .summary-row {
+              background-color: #f9fafb;
+              font-weight: bold;
+            }
+            .footer {
+              margin-top: 40px;
+              padding-top: 20px;
+              border-top: 1px solid #e5e7eb;
+              text-align: center;
+              color: #6b7280;
+              font-size: 12px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Reports & Analytics</h1>
+            <p>${storeName}</p>
+            <p>Generated on ${formatDate(new Date())}</p>
+          </div>
+
+          <!-- Quick Stats -->
+          <div class="section">
+            <div class="section-title">Quick Statistics</div>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-label">Daily Sales</div>
+                <div class="stat-value">${formatCurrency(stats.dailySales)}</div>
+                <div class="stat-change ${stats.dailyChange >= 0 ? 'positive' : 'negative'}">
+                  ${formatChange(stats.dailyChange)}
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Weekly Sales</div>
+                <div class="stat-value">${formatCurrency(stats.weeklySales)}</div>
+                <div class="stat-change ${stats.weeklyChange >= 0 ? 'positive' : 'negative'}">
+                  ${formatChange(stats.weeklyChange)}
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Monthly Sales</div>
+                <div class="stat-value">${formatCurrency(stats.monthlySales)}</div>
+                <div class="stat-change ${stats.monthlyChange >= 0 ? 'positive' : 'negative'}">
+                  ${formatChange(stats.monthlyChange)}
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Total Orders</div>
+                <div class="stat-value">${formatNumber(stats.totalOrders)}</div>
+                <div class="stat-change ${stats.ordersChange >= 0 ? 'positive' : 'negative'}">
+                  ${formatChange(stats.ordersChange)}
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Avg Order Value</div>
+                <div class="stat-value">${formatCurrency(stats.avgOrderValue)}</div>
+                <div class="stat-change ${stats.avgOrderChange >= 0 ? 'positive' : 'negative'}">
+                  ${formatChange(stats.avgOrderChange)}
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Customer Count</div>
+                <div class="stat-value">${formatNumber(stats.customerCount)}</div>
+                <div class="stat-change ${stats.customerChange >= 0 ? 'positive' : 'negative'}">
+                  ${formatChange(stats.customerChange)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          ${data.salesReport ? `
+          <!-- Sales Report -->
+          <div class="section">
+            <div class="section-title">Sales Report (This Month)</div>
+            <p><strong>Total Sales:</strong> ${formatCurrency(data.salesReport.total)}</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Payment Method</th>
+                  <th style="text-align: right;">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(data.salesReport.byMethod).map(([method, amount]) => `
+                  <tr>
+                    <td>${method.toUpperCase()}</td>
+                    <td style="text-align: right;">${formatCurrency(amount as number)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <h3 style="margin-top: 20px;">Daily Sales (Last 7 Days)</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th style="text-align: right;">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(data.salesReport.daily).map(([date, amount]) => `
+                  <tr>
+                    <td>${date}</td>
+                    <td style="text-align: right;">${formatCurrency(amount as number)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          ` : ''}
+
+          ${data.orderSummary ? `
+          <!-- Order Summary -->
+          <div class="section">
+            <div class="section-title">Order Summary</div>
+            <p><strong>Total Orders:</strong> ${formatNumber(data.orderSummary.total)}</p>
+            <h3>Orders by Status</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th style="text-align: right;">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(data.orderSummary.byStatus).map(([status, count]) => `
+                  <tr>
+                    <td>${status.replace('_', ' ').toUpperCase()}</td>
+                    <td style="text-align: right;">${formatNumber(count as number)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <h3>Orders by Payment Status</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Payment Status</th>
+                  <th style="text-align: right;">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(data.orderSummary.byPaymentStatus).map(([status, count]) => `
+                  <tr>
+                    <td>${status.toUpperCase()}</td>
+                    <td style="text-align: right;">${formatNumber(count as number)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <h3>Financial Summary</h3>
+            <table>
+              <tbody>
+                <tr>
+                  <td><strong>Total Revenue</strong></td>
+                  <td style="text-align: right;"><strong>${formatCurrency(data.orderSummary.totalRevenue)}</strong></td>
+                </tr>
+                <tr>
+                  <td>Total Paid</td>
+                  <td style="text-align: right;">${formatCurrency(data.orderSummary.totalPaid)}</td>
+                </tr>
+                <tr class="summary-row">
+                  <td>Outstanding</td>
+                  <td style="text-align: right; color: #ef4444;">${formatCurrency(data.orderSummary.outstanding)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          ` : ''}
+
+          ${data.customerAnalytics ? `
+          <!-- Customer Analytics -->
+          <div class="section">
+            <div class="section-title">Customer Analytics</div>
+            <p><strong>Total Customers:</strong> ${formatNumber(data.customerAnalytics.total)}</p>
+            <p><strong>New Customers This Month:</strong> ${formatNumber(data.customerAnalytics.newThisMonth)}</p>
+            <p><strong>Average Loyalty Points:</strong> ${formatNumber(Math.round(data.customerAnalytics.avgLoyaltyPoints))}</p>
+            <h3>Top 10 Customers</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Customer Name</th>
+                  <th style="text-align: right;">Total Spent</th>
+                  <th style="text-align: right;">Orders</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.customerAnalytics.topCustomers.map((customer: any, index: number) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td>${customer.name}</td>
+                    <td style="text-align: right;">${formatCurrency(customer.totalSpent)}</td>
+                    <td style="text-align: right;">${customer.orders}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          ` : ''}
+
+          ${data.servicePerformance ? `
+          <!-- Service Performance -->
+          <div class="section">
+            <div class="section-title">Service Performance</div>
+            <p><strong>Total Services:</strong> ${formatNumber(data.servicePerformance.totalServices)}</p>
+            <p><strong>Total Service Revenue:</strong> ${formatCurrency(data.servicePerformance.totalRevenue)}</p>
+            <h3>Top 10 Services by Revenue</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Service Name</th>
+                  <th style="text-align: right;">Quantity</th>
+                  <th style="text-align: right;">Orders</th>
+                  <th style="text-align: right;">Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.servicePerformance.topServices.map((service: any, index: number) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td>${service.name}</td>
+                    <td style="text-align: right;">${formatNumber(service.quantity)}</td>
+                    <td style="text-align: right;">${formatNumber(service.orders)}</td>
+                    <td style="text-align: right;">${formatCurrency(service.revenue)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          ` : ''}
+
+          ${data.revenueTrends ? `
+          <!-- Revenue Trends -->
+          <div class="section">
+            <div class="section-title">Revenue Trends (Last 30 Days)</div>
+            <p><strong>Total Revenue:</strong> ${formatCurrency(data.revenueTrends.total)}</p>
+            <h3>Weekly Revenue</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Week</th>
+                  <th style="text-align: right;">Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.revenueTrends.weekLabels.map((week: string) => `
+                  <tr>
+                    <td>${week}</td>
+                    <td style="text-align: right;">${formatCurrency(data.revenueTrends.weekly[week] || 0)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <h3>Daily Revenue (Last 7 Days)</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th style="text-align: right;">Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(data.revenueTrends.daily).slice(-7).map(([date, amount]) => `
+                  <tr>
+                    <td>${date}</td>
+                    <td style="text-align: right;">${formatCurrency(amount as number)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          ` : ''}
+
+          <div class="footer">
+            <p>This report was generated automatically by LaundroPOS Mobile</p>
+            <p>© ${new Date().getFullYear()} All rights reserved</p>
+          </div>
+        </body>
+      </html>
+    `
+  }
+
   const quickReports = [
-    { title: 'Sales Report', icon: 'trending-up', color: '#10b981' },
-    { title: 'Order Summary', icon: 'list', color: '#3b82f6' },
-    { title: 'Customer Analytics', icon: 'people', color: '#f59e0b' },
-    { title: 'Service Performance', icon: 'analytics', color: '#8b5cf6' },
-    { title: 'Revenue Trends', icon: 'bar-chart', color: '#06b6d4' },
-    { title: 'Export Data', icon: 'download', color: '#6b7280' },
+    { id: 'sales', title: 'Sales Report', icon: 'trending-up', color: '#10b981' },
+    { id: 'orders', title: 'Order Summary', icon: 'list', color: '#3b82f6' },
+    { id: 'customers', title: 'Customer Analytics', icon: 'people', color: '#f59e0b' },
+    { id: 'services', title: 'Service Performance', icon: 'analytics', color: '#8b5cf6' },
+    { id: 'revenue', title: 'Revenue Trends', icon: 'bar-chart', color: '#06b6d4' },
+    { id: 'export', title: 'Export Data', icon: 'download', color: '#6b7280' },
   ]
 
+  if (loading && !refreshing) {
+    return (
+      <View style={[styles.container, styles.centerContent]}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={styles.loadingText}>Loading reports...</Text>
+      </View>
+    )
+  }
+
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView 
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
       <View style={styles.header}>
         <Text style={styles.title}>Reports & Analytics</Text>
-        <TouchableOpacity style={styles.exportButton}>
+        <TouchableOpacity style={styles.exportButton} onPress={handleExportData}>
           <Ionicons name="download" size={20} color="#3b82f6" />
           <Text style={styles.exportText}>Export</Text>
         </TouchableOpacity>
@@ -111,8 +1231,12 @@ const ReportsScreen: React.FC = () => {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Quick Reports</Text>
         <View style={styles.reportsGrid}>
-          {quickReports.map((report, index) => (
-            <TouchableOpacity key={index} style={styles.reportCard}>
+          {quickReports.map((report) => (
+            <TouchableOpacity 
+              key={report.id} 
+              style={styles.reportCard}
+              onPress={() => loadReportDetails(report.id)}
+            >
               <View style={[styles.reportIcon, { backgroundColor: `${report.color}20` }]}>
                 <Ionicons name={report.icon as any} size={24} color={report.color} />
               </View>
@@ -122,50 +1246,212 @@ const ReportsScreen: React.FC = () => {
         </View>
       </View>
 
-      {/* Recent Reports */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Recent Reports</Text>
-        <View style={styles.recentReports}>
-          <View style={styles.reportItem}>
-            <View style={styles.reportItemIcon}>
-              <Ionicons name="document-text" size={20} color="#3b82f6" />
+      {/* Report Detail Modal */}
+      <Modal
+        visible={selectedReport !== null}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setSelectedReport(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {quickReports.find(r => r.id === selectedReport)?.title || 'Report'}
+              </Text>
+              <TouchableOpacity onPress={() => setSelectedReport(null)}>
+                <Ionicons name="close" size={24} color="#111827" />
+              </TouchableOpacity>
             </View>
-            <View style={styles.reportItemContent}>
-              <Text style={styles.reportItemTitle}>Daily Sales Report</Text>
-              <Text style={styles.reportItemDate}>Generated 2 hours ago</Text>
-            </View>
-            <TouchableOpacity style={styles.downloadButton}>
-              <Ionicons name="download" size={16} color="#6b7280" />
-            </TouchableOpacity>
-          </View>
 
-          <View style={styles.reportItem}>
-            <View style={styles.reportItemIcon}>
-              <Ionicons name="document-text" size={20} color="#10b981" />
-            </View>
-            <View style={styles.reportItemContent}>
-              <Text style={styles.reportItemTitle}>Weekly Summary</Text>
-              <Text style={styles.reportItemDate}>Generated yesterday</Text>
-            </View>
-            <TouchableOpacity style={styles.downloadButton}>
-              <Ionicons name="download" size={16} color="#6b7280" />
-            </TouchableOpacity>
-          </View>
+            {reportLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#3b82f6" />
+                <Text style={styles.loadingText}>Loading report data...</Text>
+              </View>
+            ) : (
+              <ScrollView 
+                style={styles.modalBody}
+                contentContainerStyle={{ paddingBottom: 10 }}
+              >
+                {selectedReport === 'sales' && reportData.salesReport && (
+                  <View>
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Total Sales (This Month)</Text>
+                      <Text style={styles.reportValue}>{formatCurrency(reportData.salesReport.total)}</Text>
+                    </View>
 
-          <View style={styles.reportItem}>
-            <View style={styles.reportItemIcon}>
-              <Ionicons name="document-text" size={20} color="#f59e0b" />
-            </View>
-            <View style={styles.reportItemContent}>
-              <Text style={styles.reportItemTitle}>Monthly Analytics</Text>
-              <Text style={styles.reportItemDate}>Generated 3 days ago</Text>
-            </View>
-            <TouchableOpacity style={styles.downloadButton}>
-              <Ionicons name="download" size={16} color="#6b7280" />
-            </TouchableOpacity>
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Sales by Payment Method</Text>
+                      {Object.entries(reportData.salesReport.byMethod).map(([method, amount]) => (
+                        <View key={method} style={styles.reportRow}>
+                          <Text style={styles.reportLabel}>{method.toUpperCase()}</Text>
+                          <Text style={styles.reportAmount}>{formatCurrency(amount as number)}</Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Daily Sales (Last 7 Days)</Text>
+                      {Object.entries(reportData.salesReport.daily).map(([date, amount]) => (
+                        <View key={date} style={styles.reportRow}>
+                          <Text style={styles.reportLabel}>{date}</Text>
+                          <Text style={styles.reportAmount}>{formatCurrency(amount as number)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {selectedReport === 'orders' && reportData.orderSummary && (
+                  <View>
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Total Orders</Text>
+                      <Text style={styles.reportValue}>{formatNumber(reportData.orderSummary.total)}</Text>
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Orders by Status</Text>
+                      {Object.entries(reportData.orderSummary.byStatus).map(([status, count]) => (
+                        <View key={status} style={styles.reportRow}>
+                          <Text style={styles.reportLabel}>{status.replace('_', ' ').toUpperCase()}</Text>
+                          <Text style={styles.reportAmount}>{formatNumber(count as number)}</Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Orders by Payment Status</Text>
+                      {Object.entries(reportData.orderSummary.byPaymentStatus).map(([status, count]) => (
+                        <View key={status} style={styles.reportRow}>
+                          <Text style={styles.reportLabel}>{status.toUpperCase()}</Text>
+                          <Text style={styles.reportAmount}>{formatNumber(count as number)}</Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Financial Summary</Text>
+                      <View style={styles.reportRow}>
+                        <Text style={styles.reportLabel}>Total Revenue</Text>
+                        <Text style={styles.reportAmount}>{formatCurrency(reportData.orderSummary.totalRevenue)}</Text>
+                      </View>
+                      <View style={styles.reportRow}>
+                        <Text style={styles.reportLabel}>Total Paid</Text>
+                        <Text style={styles.reportAmount}>{formatCurrency(reportData.orderSummary.totalPaid)}</Text>
+                      </View>
+                      <View style={styles.reportRow}>
+                        <Text style={styles.reportLabel}>Outstanding</Text>
+                        <Text style={[styles.reportAmount, { color: '#ef4444' }]}>
+                          {formatCurrency(reportData.orderSummary.outstanding)}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                )}
+
+                {selectedReport === 'customers' && reportData.customerAnalytics && (
+                  <View>
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Total Customers</Text>
+                      <Text style={styles.reportValue}>{formatNumber(reportData.customerAnalytics.total)}</Text>
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>New Customers This Month</Text>
+                      <Text style={styles.reportValue}>{formatNumber(reportData.customerAnalytics.newThisMonth)}</Text>
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Average Loyalty Points</Text>
+                      <Text style={styles.reportValue}>{formatNumber(reportData.customerAnalytics.avgLoyaltyPoints)}</Text>
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Top 10 Customers</Text>
+                      {reportData.customerAnalytics.topCustomers.map((customer: any, index: number) => (
+                        <View key={customer.id} style={styles.reportRow}>
+                          <View style={styles.customerRank}>
+                            <Text style={styles.rankNumber}>{index + 1}</Text>
+                            <Text style={styles.reportLabel}>{customer.name}</Text>
+                          </View>
+                          <View style={styles.customerStats}>
+                            <Text style={styles.reportAmount}>{formatCurrency(customer.totalSpent)}</Text>
+                            <Text style={styles.reportSubtext}>{customer.orders} orders</Text>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {selectedReport === 'services' && reportData.servicePerformance && (
+                  <View>
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Total Services</Text>
+                      <Text style={styles.reportValue}>{formatNumber(reportData.servicePerformance.totalServices)}</Text>
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Total Service Revenue</Text>
+                      <Text style={styles.reportValue}>{formatCurrency(reportData.servicePerformance.totalRevenue)}</Text>
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Top 10 Services by Revenue</Text>
+                      {reportData.servicePerformance.topServices.map((service: any, index: number) => (
+                        <View key={service.name} style={styles.reportRow}>
+                          <View style={styles.serviceInfo}>
+                            <Text style={styles.rankNumber}>{index + 1}</Text>
+                            <View>
+                              <Text style={styles.reportLabel}>{service.name}</Text>
+                              <Text style={styles.reportSubtext}>
+                                {service.quantity} sold • {service.orders} orders
+                              </Text>
+                            </View>
+                          </View>
+                          <Text style={styles.reportAmount}>{formatCurrency(service.revenue)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {selectedReport === 'revenue' && reportData.revenueTrends && (
+                  <View>
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Total Revenue (Last 30 Days)</Text>
+                      <Text style={styles.reportValue}>{formatCurrency(reportData.revenueTrends.total)}</Text>
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Weekly Revenue</Text>
+                      {reportData.revenueTrends.weekLabels.map((week: string) => (
+                        <View key={week} style={styles.reportRow}>
+                          <Text style={styles.reportLabel}>{week}</Text>
+                          <Text style={styles.reportAmount}>
+                            {formatCurrency(reportData.revenueTrends.weekly[week] || 0)}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Daily Revenue (Last 7 Days)</Text>
+                      {Object.entries(reportData.revenueTrends.daily).slice(-7).map(([date, amount]) => (
+                        <View key={date} style={styles.reportRow}>
+                          <Text style={styles.reportLabel}>{date}</Text>
+                          <Text style={styles.reportAmount}>{formatCurrency(amount as number)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </ScrollView>
+            )}
           </View>
         </View>
-      </View>
+      </Modal>
     </ScrollView>
   )
 }
@@ -174,6 +1460,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f9fafb',
+  },
+  centerContent: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#6b7280',
   },
   header: {
     flexDirection: 'row',
@@ -298,43 +1593,96 @@ const styles = StyleSheet.create({
     color: '#111827',
     textAlign: 'center',
   },
-  recentReports: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
   },
-  reportItem: {
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '90%',
+  },
+  modalHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#111827',
+  },
+  modalBody: {
+    padding: 20,
+  },
+  loadingContainer: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportSection: {
+    marginBottom: 24,
+    paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f3f4f6',
   },
-  reportItemIcon: {
-    marginRight: 12,
+  reportSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 12,
   },
-  reportItemContent: {
+  reportValue: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#3b82f6',
+    marginBottom: 8,
+  },
+  reportRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  reportLabel: {
+    fontSize: 14,
+    color: '#6b7280',
     flex: 1,
   },
-  reportItemTitle: {
+  reportAmount: {
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '600',
     color: '#111827',
-    marginBottom: 2,
   },
-  reportItemDate: {
+  reportSubtext: {
     fontSize: 12,
-    color: '#6b7280',
+    color: '#9ca3af',
+    marginTop: 2,
   },
-  downloadButton: {
-    padding: 8,
+  customerRank: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  rankNumber: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#3b82f6',
+    width: 24,
+    marginRight: 8,
+  },
+  customerStats: {
+    alignItems: 'flex-end',
+  },
+  serviceInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
 })
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, ActivityIndicator, StyleSheet, SafeAreaView, TouchableOpacity } from 'react-native'
+import { View, Text, ActivityIndicator, StyleSheet, SafeAreaView, TouchableOpacity, Alert } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import LoginScreen from './src/screens/LoginScreen'
@@ -17,6 +17,7 @@ import { StoreProvider, useStore } from './src/context/StoreContext'
 import { NotificationProvider, useNotifications } from './src/context/NotificationContext'
 import { supabase } from './lib/supabase'
 import { isFeatureEnabled } from './src/utils/featureFlags'
+import { getSessionStatus, refreshSession, signOut, shouldRefreshSession } from './src/utils/sessionManager'
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -28,6 +29,15 @@ export default function App() {
 
   useEffect(() => {
     initializeAuth()
+    
+    // Set up periodic session expiration check (every 30 seconds)
+    const sessionCheckInterval = setInterval(async () => {
+      await checkAndHandleSessionExpiration()
+    }, 30000) // Check every 30 seconds
+
+    return () => {
+      clearInterval(sessionCheckInterval)
+    }
   }, [])
 
   const initializeAuth = async () => {
@@ -55,6 +65,27 @@ export default function App() {
       console.log('✅ Session check complete:', session ? 'User logged in' : 'No session')
       
       if (session) {
+        // Check session expiration status
+        const sessionStatus = await getSessionStatus(60)
+        if (sessionStatus.isExpired) {
+          console.log('⏰ Session expired on initialization')
+          await handleSessionExpiration()
+          setLoading(false)
+          return
+        }
+        
+        // Check if session needs refresh
+        if (shouldRefreshSession(session)) {
+          console.log('🔄 Session expiring soon, refreshing...')
+          const refreshed = await refreshSession()
+          if (!refreshed) {
+            console.log('❌ Failed to refresh session on init')
+            await handleSessionExpiration()
+            setLoading(false)
+            return
+          }
+        }
+        
         console.log('👤 User logged in, checking stores...')
         try {
           await checkStoreSelectionNeeded()
@@ -69,11 +100,36 @@ export default function App() {
       console.log('✅ Auth initialization complete')
 
       // Listen for auth changes
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        console.log('🔄 Auth state changed:', _event, session ? 'Logged in' : 'Logged out')
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        console.log('🔄 Auth state changed:', event, session ? 'Logged in' : 'Logged out')
+        
+        // Handle token refresh
+        if (event === 'TOKEN_REFRESHED' && session) {
+          console.log('✅ Token refreshed successfully')
+        }
+        
+        // Handle session expiration
+        if (event === 'SIGNED_OUT' || !session) {
+          console.log('🔒 User signed out or session expired')
+          setIsAuthenticated(false)
+          return
+        }
+        
         if (session) {
+          // Check if session needs refresh
+          if (shouldRefreshSession(session)) {
+            console.log('🔄 Session expiring soon, attempting refresh...')
+            const refreshed = await refreshSession()
+            if (!refreshed) {
+              console.log('❌ Failed to refresh session, signing out...')
+              await handleSessionExpiration()
+              return
+            }
+          }
+          
           await checkStoreSelectionNeeded()
         }
+        
         setIsAuthenticated(!!session)
       })
 
@@ -84,6 +140,62 @@ export default function App() {
       setError(err instanceof Error ? err.message : 'Unknown error occurred')
       setLoading(false)
       setIsAuthenticated(false)
+    }
+  }
+
+  /**
+   * Check and handle session expiration
+   * This is called periodically to ensure the session is still valid
+   */
+  const checkAndHandleSessionExpiration = async () => {
+    if (!isAuthenticated) return
+
+    try {
+      const sessionStatus = await getSessionStatus(60) // 60 second buffer
+
+      if (sessionStatus.isExpired) {
+        console.log('⏰ Session expired, signing out...')
+        await handleSessionExpiration()
+      } else if (sessionStatus.expiresIn && sessionStatus.expiresIn < 300) {
+        // Session expires in less than 5 minutes, try to refresh
+        console.log('🔄 Session expiring soon, attempting refresh...')
+        const refreshed = await refreshSession()
+        if (!refreshed) {
+          console.log('❌ Failed to refresh session')
+          // Don't sign out yet, let it expire naturally
+        }
+      }
+    } catch (error) {
+      console.error('Error checking session expiration:', error)
+    }
+  }
+
+  /**
+   * Handle session expiration - show alert and sign out
+   */
+  const handleSessionExpiration = async () => {
+    try {
+      Alert.alert(
+        'Session Expired',
+        'Your session has expired. Please log in again to continue.',
+        [
+          {
+            text: 'OK',
+            onPress: async () => {
+              await signOut()
+              setIsAuthenticated(false)
+              setNeedsStoreSelection(false)
+            },
+          },
+        ],
+        { cancelable: false }
+      )
+    } catch (error) {
+      console.error('Error handling session expiration:', error)
+      // Force sign out even if alert fails
+      await signOut()
+      setIsAuthenticated(false)
+      setNeedsStoreSelection(false)
     }
   }
 

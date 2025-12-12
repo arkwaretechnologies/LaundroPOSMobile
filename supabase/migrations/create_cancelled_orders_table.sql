@@ -3,13 +3,13 @@
 
 CREATE TABLE IF NOT EXISTS cancelled_orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  order_id UUID NOT NULL, -- Store original order ID (no foreign key since order will be deleted)
   store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
   order_number VARCHAR(50) NOT NULL, -- Store order number for quick reference
-  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+  customer_id UUID, -- Store customer ID (no foreign key since order will be deleted)
   
   -- Cancellation details
-  cancellation_reason TEXT, -- Reason for cancellation (e.g., 'Customer request', 'Out of stock', 'Error')
+  cancellation_reason TEXT NOT NULL, -- Reason for cancellation (e.g., 'Customer request', 'Out of stock', 'Error')
   cancelled_by UUID NOT NULL REFERENCES auth.users(id), -- User who cancelled the order
   cancelled_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
   
@@ -63,61 +63,8 @@ CREATE TRIGGER cancelled_orders_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_cancelled_orders_updated_at();
 
--- Function to automatically create cancelled_orders record when order is cancelled
-CREATE OR REPLACE FUNCTION create_cancelled_order_record()
-RETURNS TRIGGER AS $$
-BEGIN
-  -- Only create record if order status changed to 'cancelled'
-  IF NEW.order_status = 'cancelled' AND (OLD.order_status IS NULL OR OLD.order_status != 'cancelled') THEN
-    INSERT INTO cancelled_orders (
-      order_id,
-      store_id,
-      order_number,
-      customer_id,
-      total_amount,
-      paid_amount,
-      balance,
-      payment_status,
-      order_status,
-      cancelled_by,
-      cancellation_reason,
-      refund_required,
-      refund_amount
-    )
-    VALUES (
-      NEW.id,
-      NEW.store_id,
-      NEW.order_number,
-      NEW.customer_id,
-      NEW.total_amount,
-      NEW.paid_amount,
-      NEW.balance,
-      NEW.payment_status,
-      NEW.order_status,
-      COALESCE(NEW.created_by, auth.uid()),
-      'Order cancelled via system',
-      CASE WHEN NEW.paid_amount > 0 THEN true ELSE false END,
-      NEW.paid_amount
-    )
-    ON CONFLICT (order_id) DO UPDATE SET
-      total_amount = NEW.total_amount,
-      paid_amount = NEW.paid_amount,
-      balance = NEW.balance,
-      payment_status = NEW.payment_status,
-      order_status = NEW.order_status,
-      updated_at = NOW();
-  END IF;
-  
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger to automatically create cancelled_orders record
-CREATE TRIGGER trigger_create_cancelled_order_record
-  AFTER UPDATE OF order_status ON orders
-  FOR EACH ROW
-  WHEN (NEW.order_status = 'cancelled' AND (OLD.order_status IS NULL OR OLD.order_status != 'cancelled'))
-  EXECUTE FUNCTION create_cancelled_order_record();
+-- Note: Cancelled orders are created manually via the application
+-- The trigger has been removed since orders are deleted after cancellation
 
 -- Add RLS (Row Level Security) policies
 ALTER TABLE cancelled_orders ENABLE ROW LEVEL SECURITY;
@@ -135,10 +82,46 @@ CREATE POLICY "Allow authenticated users to read cancelled orders"
     )
   );
 
--- Policy: Allow store admins to manage cancelled orders for their stores
+-- Policy: Allow authenticated users to insert cancelled orders for their assigned stores
+CREATE POLICY "Allow authenticated users to insert cancelled orders"
+  ON cancelled_orders
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM user_store_assignments usa
+      WHERE usa.store_id = cancelled_orders.store_id
+      AND usa.user_id = auth.uid()
+    )
+  );
+
+-- Policy: Allow store admins to update and delete cancelled orders for their stores
 CREATE POLICY "Allow store admins to manage cancelled orders"
   ON cancelled_orders
-  FOR ALL
+  FOR UPDATE
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM user_store_assignments usa
+      JOIN users u ON u.id = usa.user_id
+      WHERE usa.store_id = cancelled_orders.store_id
+      AND u.id = auth.uid()
+      AND (u.role = 'super_admin' OR u.role = 'store_owner' OR u.role = 'manager')
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM user_store_assignments usa
+      JOIN users u ON u.id = usa.user_id
+      WHERE usa.store_id = cancelled_orders.store_id
+      AND u.id = auth.uid()
+      AND (u.role = 'super_admin' OR u.role = 'store_owner' OR u.role = 'manager')
+    )
+  );
+
+CREATE POLICY "Allow store admins to delete cancelled orders"
+  ON cancelled_orders
+  FOR DELETE
   TO authenticated
   USING (
     EXISTS (

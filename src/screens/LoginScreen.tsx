@@ -12,6 +12,7 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native'
 import { supabase } from '../../lib/supabase'
 
@@ -144,7 +145,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             ]}
           >
             <View style={styles.logoCircle}>
-              <Text style={styles.logoEmoji}>🧺</Text>
+              <Image
+                source={require('../../assets/LaundroPOS_Icon.png')}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
             </View>
           </Animated.View>
 
@@ -280,8 +285,9 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 10,
   },
-  logoEmoji: {
-    fontSize: 60,
+  logoImage: {
+    width: 80,
+    height: 80,
   },
   title: {
     fontSize: 32,

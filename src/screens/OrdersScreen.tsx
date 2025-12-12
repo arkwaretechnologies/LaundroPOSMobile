@@ -44,10 +44,14 @@ interface Order {
   notes: string | null
   order_items: OrderItem[]
   payments: Payment[]
+  cancellation_reason?: string
+  cancelled_at?: string
+  store_id?: string
 }
 
-type OrderFilter = 'all' | 'pending' | 'in_progress' | 'ready' | 'completed'
+type OrderFilter = 'all' | 'pending' | 'in_progress' | 'ready' | 'completed' | 'cancelled'
 type PaymentFilter = 'all' | 'unpaid' | 'partial' | 'paid'
+type DateFilter = 'all_time' | 'this_month' | 'this_week' | 'this_day' | 'custom'
 
 export default function OrdersScreen() {
   const { currentStore } = useStore()
@@ -63,7 +67,15 @@ export default function OrdersScreen() {
   const ITEMS_PER_PAGE = 20
   const [orderFilter, setOrderFilter] = useState<OrderFilter>('pending')
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all')
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all_time')
   const [searchQuery, setSearchQuery] = useState('')
+  
+  // Custom date range
+  const [customDateFrom, setCustomDateFrom] = useState<Date | null>(null)
+  const [customDateTo, setCustomDateTo] = useState<Date | null>(null)
+  const [showCustomDateModal, setShowCustomDateModal] = useState(false)
+  const [tempDateFrom, setTempDateFrom] = useState<Date>(new Date())
+  const [tempDateTo, setTempDateTo] = useState<Date>(new Date())
   
   // Selected order details
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
@@ -81,6 +93,11 @@ export default function OrdersScreen() {
   
   // QR Scanner
   const [showQRScanner, setShowQRScanner] = useState(false)
+  
+  // Cancellation modal
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [cancellationReason, setCancellationReason] = useState('')
+  const [cancellationNotes, setCancellationNotes] = useState('')
 
   useEffect(() => {
     if (currentStore) {
@@ -99,14 +116,14 @@ export default function OrdersScreen() {
 
   useEffect(() => {
     applyFilters()
-  }, [orders, orderFilter, paymentFilter, searchQuery])
+  }, [orders, orderFilter, paymentFilter, searchQuery, dateFilter, customDateFrom, customDateTo])
 
   // Reset pagination when filter changes
   useEffect(() => {
     if (currentStore) {
       loadOrders(true) // Reset and reload with new filter
     }
-  }, [orderFilter, paymentFilter])
+  }, [orderFilter, paymentFilter, dateFilter, customDateFrom, customDateTo])
 
   const loadOrders = async (reset: boolean = false) => {
     if (!currentStore) {
@@ -131,7 +148,127 @@ export default function OrdersScreen() {
 
       console.log(`📦 Loading orders for store: ${currentStore.id} (page ${currentPage + 1}, items ${from}-${to})`)
 
-      const { data, error } = await supabase
+      // Calculate date range based on filter
+      let dateFrom: Date | null = null
+      let dateTo: Date | null = null
+
+      if (dateFilter === 'custom' && customDateFrom && customDateTo) {
+        dateFrom = new Date(customDateFrom)
+        dateFrom.setHours(0, 0, 0, 0)
+        dateTo = new Date(customDateTo)
+        dateTo.setHours(23, 59, 59, 999)
+      } else if (dateFilter !== 'all_time') {
+        const now = new Date()
+        dateTo = new Date(now)
+        dateTo.setHours(23, 59, 59, 999)
+
+        switch (dateFilter) {
+          case 'this_day':
+            dateFrom = new Date(now)
+            dateFrom.setHours(0, 0, 0, 0)
+            break
+          case 'this_week':
+            dateFrom = new Date(now)
+            dateFrom.setDate(now.getDate() - now.getDay()) // Start of week (Sunday)
+            dateFrom.setHours(0, 0, 0, 0)
+            break
+          case 'this_month':
+            dateFrom = new Date(now.getFullYear(), now.getMonth(), 1)
+            dateFrom.setHours(0, 0, 0, 0)
+            break
+        }
+      }
+
+      // Load from cancelled_orders if filter is 'cancelled'
+      if (orderFilter === 'cancelled') {
+        let cancelledQuery = supabase
+          .from('cancelled_orders')
+          .select('*')
+          .eq('store_id', currentStore.id)
+
+        // Apply date filter (use cancelled_at for cancelled orders)
+        if (dateFrom && dateTo) {
+          cancelledQuery = cancelledQuery.gte('cancelled_at', dateFrom.toISOString())
+          cancelledQuery = cancelledQuery.lte('cancelled_at', dateTo.toISOString())
+        }
+
+        const { data: cancelledData, error: cancelledError } = await cancelledQuery
+          .order('cancelled_at', { ascending: false })
+          .range(from, to)
+
+        if (cancelledError) {
+          console.error('❌ Error loading cancelled orders:', cancelledError)
+          throw cancelledError
+        }
+
+        // Fetch customer data for cancelled orders if customer_id exists
+        const customerIds = (cancelledData || [])
+          .map((c: any) => c.customer_id)
+          .filter((id: string | null) => id !== null)
+        
+        let customersMap: Record<string, any> = {}
+        if (customerIds.length > 0) {
+          const { data: customersData } = await supabase
+            .from('customers')
+            .select('id, first_name, last_name, phone')
+            .in('id', customerIds)
+          
+          if (customersData) {
+            customersMap = customersData.reduce((acc: any, customer: any) => {
+              acc[customer.id] = customer
+              return acc
+            }, {})
+          }
+        }
+
+        // Transform cancelled orders to match Order interface
+        const transformedData = (cancelledData || []).map((cancelled: any) => ({
+          id: cancelled.order_id,
+          order_number: cancelled.order_number,
+          customer_id: cancelled.customer_id,
+          customers: cancelled.customer_id && customersMap[cancelled.customer_id] 
+            ? customersMap[cancelled.customer_id] 
+            : null,
+          total_amount: cancelled.total_amount,
+          paid_amount: cancelled.paid_amount,
+          balance: cancelled.balance,
+          payment_status: cancelled.payment_status,
+          order_status: 'cancelled' as const,
+          order_date: cancelled.cancelled_at, // Use cancelled_at as order_date for display
+          notes: cancelled.notes,
+          order_items: [], // Cancelled orders don't have order_items
+          payments: [], // Cancelled orders don't have payments
+          cancellation_reason: cancelled.cancellation_reason,
+          cancelled_at: cancelled.cancelled_at,
+          store_id: cancelled.store_id,
+        }))
+
+        // Ensure all orders belong to the selected store
+        const filteredData = transformedData.filter((order: any) => order.store_id === currentStore.id)
+        
+        console.log(`✅ Cancelled orders loaded: ${filteredData.length} orders (page ${currentPage + 1})`)
+        
+        setHasMore(filteredData.length === ITEMS_PER_PAGE)
+        
+        if (reset) {
+          setOrders(filteredData as any)
+          setPage(1)
+        } else {
+          setOrders(prev => [...prev, ...filteredData] as any)
+          setPage(prev => prev + 1)
+        }
+        
+        // Mark all loaded orders as viewed
+        const orderIds = filteredData.map((order: any) => order.id)
+        if (orderIds.length > 0) {
+          await markOrdersAsViewed(orderIds)
+        }
+        
+        return
+      }
+
+      // Load from orders table for non-cancelled filters
+      let query = supabase
         .from('orders')
         .select(`
           *,
@@ -144,6 +281,14 @@ export default function OrdersScreen() {
           payments (*)
         `)
         .eq('store_id', currentStore.id)
+
+      // Apply date filter
+      if (dateFrom && dateTo) {
+        query = query.gte('order_date', dateFrom.toISOString())
+        query = query.lte('order_date', dateTo.toISOString())
+      }
+
+      const { data, error } = await query
         .order('order_date', { ascending: false })
         .range(from, to)
 
@@ -445,6 +590,98 @@ export default function OrdersScreen() {
     }
   }
 
+  const handleCancelOrder = async () => {
+    if (!selectedOrder) return
+    
+    if (!cancellationReason.trim()) {
+      Alert.alert('Required Field', 'Please provide a cancellation reason')
+      return
+    }
+
+    if (!currentStore) {
+      Alert.alert('Error', 'No store selected')
+      return
+    }
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        Alert.alert('Error', 'User not authenticated')
+        return
+      }
+
+      // Verify the order belongs to the current store
+      if (selectedOrder.store_id !== currentStore.id) {
+        Alert.alert('Error', 'Order does not belong to the selected store')
+        return
+      }
+
+      // Create cancelled_orders record with all order details
+      console.log('🔄 Creating cancelled_orders record...', {
+        order_id: selectedOrder.id,
+        store_id: currentStore.id,
+        order_number: selectedOrder.order_number,
+        cancellation_reason: cancellationReason.trim(),
+        cancelled_by: user.id,
+      })
+
+      const { data: cancelledData, error: cancelError } = await supabase
+        .from('cancelled_orders')
+        .insert({
+          order_id: selectedOrder.id,
+          store_id: currentStore.id,
+          order_number: selectedOrder.order_number,
+          customer_id: selectedOrder.customer_id,
+          total_amount: selectedOrder.total_amount,
+          paid_amount: selectedOrder.paid_amount,
+          balance: selectedOrder.balance,
+          payment_status: selectedOrder.payment_status,
+          order_status: selectedOrder.order_status,
+          cancellation_reason: cancellationReason.trim(),
+          cancelled_by: user.id,
+          refund_required: selectedOrder.paid_amount > 0,
+          refund_amount: selectedOrder.paid_amount,
+          notes: cancellationNotes.trim() || null,
+        })
+        .select()
+
+      if (cancelError) {
+        console.error('❌ Error inserting into cancelled_orders:', cancelError)
+        console.error('Error details:', JSON.stringify(cancelError, null, 2))
+        throw cancelError
+      }
+
+      if (cancelledData && cancelledData.length > 0) {
+        console.log('✅ Cancelled order saved successfully:', cancelledData[0])
+      } else {
+        console.warn('⚠️ No data returned from cancelled_orders insert')
+      }
+
+      // Delete the order from orders table
+      const { error: deleteError } = await supabase
+        .from('orders')
+        .delete()
+        .eq('id', selectedOrder.id)
+        .eq('store_id', currentStore.id)
+
+      if (deleteError) throw deleteError
+
+      // Reset form and close modals first
+      setCancellationReason('')
+      setCancellationNotes('')
+      setShowCancelModal(false)
+      setShowOrderDetails(false)
+      
+      // Reload orders with pagination reset
+      await loadOrders(true)
+      
+      Alert.alert('Success', `Order ${selectedOrder.order_number} has been cancelled and moved to cancelled orders.`)
+    } catch (error: any) {
+      console.error('Error cancelling order:', error)
+      Alert.alert('Error', `Failed to cancel order: ${error.message}`)
+    }
+  }
+
   const handleAddPayment = async () => {
     if (!selectedOrder) return
 
@@ -669,7 +906,7 @@ export default function OrdersScreen() {
         contentContainerStyle={styles.filtersContent}
       >
         <Text style={styles.filterLabel}>Status:</Text>
-        {(['pending', 'in_progress', 'ready', 'completed', 'all'] as OrderFilter[]).map(filter => (
+        {(['pending', 'in_progress', 'ready', 'completed', 'cancelled', 'all'] as OrderFilter[]).map(filter => (
           <TouchableOpacity
             key={filter}
             style={[styles.filterButton, orderFilter === filter && styles.filterButtonActive]}
@@ -695,6 +932,55 @@ export default function OrdersScreen() {
             </Text>
           </TouchableOpacity>
         ))}
+      </ScrollView>
+
+      {/* Date Filters */}
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false} 
+        style={styles.filters}
+        contentContainerStyle={styles.filtersContent}
+      >
+        <Text style={styles.filterLabel}>Date:</Text>
+        {([
+          { value: 'all_time', label: 'All Time' },
+          { value: 'this_month', label: 'This Month' },
+          { value: 'this_week', label: 'This Week' },
+          { value: 'this_day', label: 'Today' },
+          { value: 'custom', label: 'Custom Range' },
+        ] as { value: DateFilter; label: string }[]).map(filter => (
+          <TouchableOpacity
+            key={filter.value}
+            style={[styles.filterButton, dateFilter === filter.value && styles.filterButtonActive]}
+            onPress={() => {
+              if (filter.value === 'custom') {
+                // Initialize with current date range or today
+                if (customDateFrom && customDateTo) {
+                  setTempDateFrom(customDateFrom)
+                  setTempDateTo(customDateTo)
+                } else {
+                  const today = new Date()
+                  setTempDateFrom(today)
+                  setTempDateTo(today)
+                }
+                setShowCustomDateModal(true)
+              } else {
+                setDateFilter(filter.value)
+                setCustomDateFrom(null)
+                setCustomDateTo(null)
+              }
+            }}
+          >
+            <Text style={[styles.filterButtonText, dateFilter === filter.value && styles.filterButtonTextActive]}>
+              {filter.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+        {dateFilter === 'custom' && customDateFrom && customDateTo && (
+          <Text style={styles.customDateRangeText}>
+            {customDateFrom.toLocaleDateString()} - {customDateTo.toLocaleDateString()}
+          </Text>
+        )}
       </ScrollView>
 
       {/* Orders List */}
@@ -854,6 +1140,31 @@ export default function OrdersScreen() {
                   </View>
                 </View>
 
+                {/* Cancellation Information */}
+                {selectedOrder.order_status === 'cancelled' && selectedOrder.cancellation_reason && (
+                  <>
+                    <Text style={styles.sectionTitle}>Cancellation Information</Text>
+                    <View style={styles.cancellationInfoBox}>
+                      <View style={styles.detailSection}>
+                        <Text style={styles.detailLabel}>Cancellation Reason</Text>
+                        <Text style={styles.detailValue}>{selectedOrder.cancellation_reason}</Text>
+                      </View>
+                      {selectedOrder.cancelled_at && (
+                        <View style={styles.detailSection}>
+                          <Text style={styles.detailLabel}>Cancelled On</Text>
+                          <Text style={styles.detailValue}>{formatDate(selectedOrder.cancelled_at)}</Text>
+                        </View>
+                      )}
+                      {selectedOrder.notes && (
+                        <View style={styles.detailSection}>
+                          <Text style={styles.detailLabel}>Notes</Text>
+                          <Text style={styles.detailValue}>{selectedOrder.notes}</Text>
+                        </View>
+                      )}
+                    </View>
+                  </>
+                )}
+
                 {/* Payment History */}
                 {selectedOrder.payments && selectedOrder.payments.length > 0 && (
                   <>
@@ -944,23 +1255,7 @@ export default function OrdersScreen() {
                       <TouchableOpacity
                         style={styles.actionButtonCancel}
                         onPress={() => {
-                          Alert.alert(
-                            'Cancel Order',
-                            `Are you sure you want to cancel order ${selectedOrder.order_number}? This action cannot be undone.`,
-                            [
-                              {
-                                text: 'No',
-                                style: 'cancel'
-                              },
-                              {
-                                text: 'Yes, Cancel Order',
-                                style: 'destructive',
-                                onPress: () => {
-                                  updateOrderStatus(selectedOrder.id, 'cancelled')
-                                }
-                              }
-                            ]
-                          )
+                          setShowCancelModal(true)
                         }}
                       >
                         <Ionicons name="close-circle-outline" size={20} color="#ef4444" />
@@ -1059,6 +1354,140 @@ export default function OrdersScreen() {
         </View>
       </Modal>
 
+      {/* Custom Date Range Modal */}
+      <Modal
+        visible={showCustomDateModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowCustomDateModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Custom Date Range</Text>
+              <TouchableOpacity onPress={() => setShowCustomDateModal(false)}>
+                <Ionicons name="close" size={24} color="#111827" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView 
+              style={styles.modalBody}
+              contentContainerStyle={{ paddingBottom: 10 }}
+            >
+              <Text style={styles.inputLabel}>From Date</Text>
+              <TouchableOpacity
+                style={styles.datePickerButton}
+                onPress={() => {
+                  // Simple date picker - in production, use a proper date picker library
+                  const date = new Date(tempDateFrom)
+                  Alert.prompt(
+                    'Select From Date',
+                    'Enter date (YYYY-MM-DD)',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'OK',
+                        onPress: (text?: string) => {
+                          if (text) {
+                            const parsed = new Date(text)
+                            if (!isNaN(parsed.getTime())) {
+                              setTempDateFrom(parsed)
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    'plain-text',
+                    tempDateFrom.toISOString().split('T')[0]
+                  )
+                }}
+              >
+                <Text style={styles.datePickerText}>
+                  {tempDateFrom.toLocaleDateString('en-US', { 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })}
+                </Text>
+                <Ionicons name="calendar-outline" size={20} color="#6b7280" />
+              </TouchableOpacity>
+
+              <Text style={[styles.inputLabel, { marginTop: 20 }]}>To Date</Text>
+              <TouchableOpacity
+                style={styles.datePickerButton}
+                onPress={() => {
+                  Alert.prompt(
+                    'Select To Date',
+                    'Enter date (YYYY-MM-DD)',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'OK',
+                        onPress: (text?: string) => {
+                          if (text) {
+                            const parsed = new Date(text)
+                            if (!isNaN(parsed.getTime())) {
+                              setTempDateTo(parsed)
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    'plain-text',
+                    tempDateTo.toISOString().split('T')[0]
+                  )
+                }}
+              >
+                <Text style={styles.datePickerText}>
+                  {tempDateTo.toLocaleDateString('en-US', { 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })}
+                </Text>
+                <Ionicons name="calendar-outline" size={20} color="#6b7280" />
+              </TouchableOpacity>
+
+              {tempDateFrom > tempDateTo && (
+                <View style={styles.dateErrorBox}>
+                  <Ionicons name="alert-circle" size={20} color="#ef4444" />
+                  <Text style={styles.dateErrorText}>
+                    From date must be before or equal to To date
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={() => {
+                  setShowCustomDateModal(false)
+                  setTempDateFrom(new Date())
+                  setTempDateTo(new Date())
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.submitButton, tempDateFrom > tempDateTo && { opacity: 0.5 }]}
+                disabled={tempDateFrom > tempDateTo}
+                onPress={() => {
+                  if (tempDateFrom <= tempDateTo) {
+                    setCustomDateFrom(tempDateFrom)
+                    setCustomDateTo(tempDateTo)
+                    setDateFilter('custom')
+                    setShowCustomDateModal(false)
+                  }
+                }}
+              >
+                <Text style={styles.submitButtonText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* QR Scanner Modal */}
       <Modal
         visible={showQRScanner}
@@ -1073,6 +1502,110 @@ export default function OrdersScreen() {
           }}
           onClose={() => setShowQRScanner(false)}
         />
+      </Modal>
+
+      {/* Cancel Order Modal */}
+      <Modal
+        visible={showCancelModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowCancelModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Cancel Order</Text>
+              <TouchableOpacity onPress={() => setShowCancelModal(false)}>
+                <Ionicons name="close" size={24} color="#111827" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView 
+              style={styles.modalBody}
+              contentContainerStyle={{ paddingBottom: 10 }}
+            >
+              {selectedOrder && (
+                <>
+                  <View style={styles.cancelOrderInfo}>
+                    <Text style={styles.cancelOrderLabel}>Order Number:</Text>
+                    <Text style={styles.cancelOrderValue}>{selectedOrder.order_number}</Text>
+                  </View>
+                  
+                  {selectedOrder.customers && (
+                    <View style={styles.cancelOrderInfo}>
+                      <Text style={styles.cancelOrderLabel}>Customer:</Text>
+                      <Text style={styles.cancelOrderValue}>
+                        {selectedOrder.customers.first_name} {selectedOrder.customers.last_name}
+                      </Text>
+                    </View>
+                  )}
+
+                  <View style={styles.cancelOrderInfo}>
+                    <Text style={styles.cancelOrderLabel}>Total Amount:</Text>
+                    <Text style={styles.cancelOrderValue}>₱{selectedOrder.total_amount.toFixed(2)}</Text>
+                  </View>
+
+                  {selectedOrder.paid_amount > 0 && (
+                    <View style={[styles.cancelOrderInfo, styles.refundWarning]}>
+                      <Ionicons name="warning" size={20} color="#f59e0b" />
+                      <Text style={styles.refundWarningText}>
+                        This order has a payment of ₱{selectedOrder.paid_amount.toFixed(2)}. A refund will be required.
+                      </Text>
+                    </View>
+                  )}
+
+                  <Text style={styles.inputLabel}>Cancellation Reason *</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="e.g., Customer request, Out of stock, Error"
+                    placeholderTextColor="#9ca3af"
+                    value={cancellationReason}
+                    onChangeText={setCancellationReason}
+                    multiline
+                    numberOfLines={3}
+                  />
+
+                  <Text style={styles.inputLabel}>Additional Notes</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="Any additional information about the cancellation"
+                    placeholderTextColor="#9ca3af"
+                    value={cancellationNotes}
+                    onChangeText={setCancellationNotes}
+                    multiline
+                    numberOfLines={3}
+                  />
+
+                  <View style={styles.cancelWarningBox}>
+                    <Ionicons name="alert-circle" size={20} color="#ef4444" />
+                    <Text style={styles.cancelWarningText}>
+                      This action cannot be undone. The order will be removed from the orders list and saved to cancelled orders.
+                    </Text>
+                  </View>
+                </>
+              )}
+            </ScrollView>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={() => {
+                  setShowCancelModal(false)
+                  setCancellationReason('')
+                  setCancellationNotes('')
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.submitButton, { backgroundColor: '#ef4444' }]}
+                onPress={handleCancelOrder}
+              >
+                <Text style={styles.submitButtonText}>Confirm Cancellation</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
     </View>
   )
@@ -1533,6 +2066,11 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     marginBottom: 20,
+    backgroundColor: '#ffffff',
+  },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
   },
   paymentMethods: {
     flexDirection: 'row',
@@ -1589,5 +2127,122 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  cancelOrderInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  cancelOrderLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '500',
+  },
+  cancelOrderValue: {
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '600',
+  },
+  refundWarning: {
+    backgroundColor: '#fef3c7',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  refundWarningText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#92400e',
+    lineHeight: 20,
+  },
+  cancelWarningBox: {
+    backgroundColor: '#fee2e2',
+    padding: 16,
+    borderRadius: 8,
+    marginTop: 8,
+    marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  cancelWarningText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#991b1b',
+    lineHeight: 20,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    padding: 20,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  datePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#ffffff',
+    marginBottom: 20,
+  },
+  datePickerText: {
+    fontSize: 16,
+    color: '#111827',
+  },
+  customDateRangeText: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginLeft: 8,
+    fontStyle: 'italic',
+  },
+  dateErrorBox: {
+    backgroundColor: '#fee2e2',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 8,
+    marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dateErrorText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#991b1b',
+    lineHeight: 20,
+  },
+  cancellationInfoBox: {
+    backgroundColor: '#fee2e2',
+    padding: 16,
+    borderRadius: 8,
+    marginBottom: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: '#ef4444',
   },
 })

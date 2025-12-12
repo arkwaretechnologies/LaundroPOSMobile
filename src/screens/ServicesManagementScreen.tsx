@@ -11,6 +11,7 @@ import {
   ActivityIndicator 
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 
@@ -29,6 +30,7 @@ interface Service {
 
 const ServicesManagementScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { currentStore } = useStore()
+  const insets = useSafeAreaInsets()
   const [services, setServices] = useState<Service[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -397,7 +399,7 @@ const ServicesManagementScreen: React.FC<{ navigation: any }> = ({ navigation })
         onRequestClose={() => setShowModal(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
                 {editingService ? 'Edit Service' : 'Add New Service'}
@@ -407,7 +409,10 @@ const ServicesManagementScreen: React.FC<{ navigation: any }> = ({ navigation })
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.modalBody}>
+            <ScrollView 
+              style={styles.modalBody}
+              contentContainerStyle={{ paddingBottom: 10 }}
+            >
               {/* Service Name */}
               <View style={styles.formGroup}>
                 <Text style={styles.label}>Service Name *</Text>

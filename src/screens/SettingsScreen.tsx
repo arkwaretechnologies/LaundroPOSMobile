@@ -69,14 +69,6 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
 
   const settingsSections = [
     {
-      title: 'Account',
-      items: [
-        { icon: 'person', title: 'Profile Settings', subtitle: 'Manage your account', color: '#3b82f6' },
-        { icon: 'key', title: 'Change Password', subtitle: 'Update your password', color: '#6b7280' },
-        { icon: 'shield-checkmark', title: 'Security', subtitle: 'Two-factor authentication', color: '#10b981' },
-      ]
-    },
-    {
       title: 'Store Settings',
       items: [
         { icon: 'swap-horizontal', title: 'Switch Store', subtitle: currentStore?.name || 'Select a store', color: '#3b82f6', action: 'switchStore' },
@@ -84,31 +76,6 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
         { icon: 'pricetag', title: 'Services & Pricing', subtitle: 'Manage laundry services', color: '#10b981', action: 'services' },
         { icon: 'print', title: 'Printer Configuration', subtitle: 'Setup and select printer', color: '#8b5cf6', action: 'printer' },
         { icon: 'card', title: 'Payment Methods', subtitle: 'Accept payment types', color: '#ef4444', action: 'paymentMethods' },
-      ]
-    },
-    {
-      title: 'App Settings',
-      items: [
-        { 
-          icon: 'notifications', 
-          title: 'Push Notifications', 
-          subtitle: 'Order updates and alerts',
-          color: '#3b82f6',
-          type: 'switch',
-          value: notificationsEnabled,
-          onValueChange: setNotificationsEnabled
-        },
-        { 
-          icon: 'sync', 
-          title: 'Auto Sync', 
-          subtitle: 'Sync data automatically',
-          color: '#10b981',
-          type: 'switch',
-          value: autoSyncEnabled,
-          onValueChange: setAutoSyncEnabled
-        },
-        { icon: 'language', title: 'Language', subtitle: 'English', color: '#6b7280' },
-        { icon: 'moon', title: 'Dark Mode', subtitle: 'System', color: '#4b5563' },
       ]
     },
     {

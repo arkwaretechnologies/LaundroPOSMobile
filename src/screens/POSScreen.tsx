@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 import { isFeatureEnabled } from '../utils/featureFlags'
 import { PaymentMethod } from '../types/paymentMethod'
+import ThermalPrinterService from '../services/ThermalPrinterService'
 
 interface Service {
   id: string
@@ -592,6 +593,45 @@ const POSScreen: React.FC = () => {
 
         if (paymentError) throw paymentError
         console.log('Payment recorded:', amountPaid)
+      }
+
+      // Print claim ticket
+      try {
+        const customerName = selectedCustomer 
+          ? `${selectedCustomer.first_name} ${selectedCustomer.last_name}`.trim()
+          : 'Walk-in Customer'
+        
+        // Get order date - use order_date if available, otherwise use created_at or current date
+        const orderDate = orderData.order_date || orderData.created_at || new Date().toISOString()
+        
+        const printOrder = {
+          orderId: orderData.id,
+          orderNumber: orderData.order_number,
+          customerName: customerName,
+          orderDate: orderDate,
+          totalAmount: totalAmount,
+          items: cart.map(item => ({
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price,
+          })),
+          storeInfo: currentStore ? {
+            name: currentStore.name || '',
+            address: currentStore.address || '',
+          } : undefined,
+        }
+
+        console.log('🖨️ Attempting to print claim ticket...')
+        const printSuccess = await ThermalPrinterService.getInstance().printOrderClaimStub(printOrder)
+        
+        if (printSuccess) {
+          console.log('✅ Claim ticket printed successfully')
+        } else {
+          console.log('⚠️ Claim ticket printing failed or printer not available')
+        }
+      } catch (printError: any) {
+        // Don't block the success flow if printing fails
+        console.error('❌ Error printing claim ticket:', printError)
       }
 
       // Show success message

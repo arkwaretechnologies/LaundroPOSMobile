@@ -918,27 +918,57 @@ export default function OrdersScreen() {
                   )}
 
                   {selectedOrder.order_status !== 'completed' && selectedOrder.order_status !== 'cancelled' && (
-                    <TouchableOpacity
-                      style={styles.actionButtonSecondary}
-                      onPress={() => {
-                        // If order is ready but unpaid, redirect to payment instead of completing
-                        if (selectedOrder.order_status === 'ready' && selectedOrder.payment_status === 'unpaid') {
-                          setShowOrderDetails(false)
-                          setShowPaymentModal(true)
-                          return
-                        }
-                        
-                        const nextStatus = selectedOrder.order_status === 'pending' ? 'in_progress' : 
-                                         selectedOrder.order_status === 'in_progress' ? 'ready' : 'completed'
-                        updateOrderStatus(selectedOrder.id, nextStatus)
-                      }}
-                    >
-                      <Ionicons name="checkmark-circle-outline" size={20} color="#10b981" />
-                      <Text style={[styles.actionButtonText, { color: '#10b981' }]}>
-                        Mark as {selectedOrder.order_status === 'pending' ? 'In Progress' : 
-                                 selectedOrder.order_status === 'in_progress' ? 'Ready' : 'Completed'}
-                      </Text>
-                    </TouchableOpacity>
+                    <>
+                      <TouchableOpacity
+                        style={styles.actionButtonSecondary}
+                        onPress={() => {
+                          // If order is ready but unpaid, redirect to payment instead of completing
+                          if (selectedOrder.order_status === 'ready' && selectedOrder.payment_status === 'unpaid') {
+                            setShowOrderDetails(false)
+                            setShowPaymentModal(true)
+                            return
+                          }
+                          
+                          const nextStatus = selectedOrder.order_status === 'pending' ? 'in_progress' : 
+                                           selectedOrder.order_status === 'in_progress' ? 'ready' : 'completed'
+                          updateOrderStatus(selectedOrder.id, nextStatus)
+                        }}
+                      >
+                        <Ionicons name="checkmark-circle-outline" size={20} color="#10b981" />
+                        <Text style={[styles.actionButtonText, { color: '#10b981' }]}>
+                          Mark as {selectedOrder.order_status === 'pending' ? 'In Progress' : 
+                                   selectedOrder.order_status === 'in_progress' ? 'Ready' : 'Completed'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.actionButtonCancel}
+                        onPress={() => {
+                          Alert.alert(
+                            'Cancel Order',
+                            `Are you sure you want to cancel order ${selectedOrder.order_number}? This action cannot be undone.`,
+                            [
+                              {
+                                text: 'No',
+                                style: 'cancel'
+                              },
+                              {
+                                text: 'Yes, Cancel Order',
+                                style: 'destructive',
+                                onPress: () => {
+                                  updateOrderStatus(selectedOrder.id, 'cancelled')
+                                }
+                              }
+                            ]
+                          )
+                        }}
+                      >
+                        <Ionicons name="close-circle-outline" size={20} color="#ef4444" />
+                        <Text style={[styles.actionButtonText, { color: '#ef4444' }]}>
+                          Cancel Order
+                        </Text>
+                      </TouchableOpacity>
+                    </>
                   )}
                 </View>
               </ScrollView>
@@ -1419,9 +1449,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#ffffff',
     paddingVertical: 14,
+    marginTop: 8,
     borderRadius: 12,
     borderWidth: 2,
     borderColor: '#10b981',
+    gap: 8,
+  },
+  actionButtonCancel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    paddingVertical: 14,
+    marginTop: 8,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#ef4444',
     gap: 8,
   },
   actionButtonText: {

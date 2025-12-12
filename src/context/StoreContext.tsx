@@ -5,6 +5,8 @@ interface Store {
   id: string
   name: string
   address?: string
+  phone?: string
+  email?: string
   features?: {
     inventory_tracking?: boolean
     loyalty_points?: boolean
@@ -79,6 +81,8 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
             id,
             name,
             address,
+            phone,
+            email,
             features
           )
         `)
@@ -103,6 +107,8 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
               id,
               name,
               address,
+              phone,
+              email,
               features
             )
           `)
@@ -122,9 +128,13 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
         }
       } else if (stores.length > 0 && currentStore) {
         console.log('Current store already set:', currentStore.name)
-        // Verify the current store is still in the available stores
-        const isCurrentStoreValid = stores.some(store => store.id === currentStore.id)
-        if (!isCurrentStoreValid) {
+        // Verify the current store is still in the available stores and update it with latest data
+        const updatedStore = stores.find(store => store.id === currentStore.id)
+        if (updatedStore) {
+          // Update current store with latest data (including phone and email)
+          console.log('🔄 Updating current store with latest data (phone, email, etc.)')
+          setCurrentStore(updatedStore)
+        } else {
           console.log('Current store is no longer available, switching to first store')
           setCurrentStore(stores[0])
         }
@@ -165,7 +175,7 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
       console.log('🔍 Store not in available stores, fetching from database...')
       const { data, error } = await supabase
         .from('stores')
-        .select('id, name, address, features')
+        .select('id, name, address, phone, email, features')
         .eq('id', storeId)
         .single()
       

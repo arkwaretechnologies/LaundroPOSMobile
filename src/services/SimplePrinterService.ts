@@ -17,6 +17,7 @@ interface Order {
     name: string
     address: string
     phone?: string
+    email?: string
   }
   orderNumber?: string
 }
@@ -105,11 +106,53 @@ Test completed successfully!
     const dateStr = this.formatDate(date)
     const timeStr = this.formatTime(date)
 
+    console.log('📋 SimplePrinterService - Generating claim stub with store info:', {
+      name: order.storeInfo?.name,
+      address: order.storeInfo?.address,
+      phone: order.storeInfo?.phone,
+      email: order.storeInfo?.email
+    })
+
     let text = `\n`
     
-    // Store name
+    // Store details (centered)
     if (order.storeInfo?.name) {
-      text += `${order.storeInfo.name.toUpperCase()}\n`
+      const storeName = order.storeInfo.name.toUpperCase()
+      // Center the store name (assuming 32 character width)
+      const padding = Math.max(0, Math.floor((32 - storeName.length) / 2))
+      text += ' '.repeat(padding) + storeName + `\n`
+    }
+    
+    // Store address (centered)
+    if (order.storeInfo?.address) {
+      const address = order.storeInfo.address
+      const padding = Math.max(0, Math.floor((32 - address.length) / 2))
+      text += ' '.repeat(padding) + address + `\n`
+    }
+    
+    // Contact No. (centered)
+    if (order.storeInfo?.phone && order.storeInfo.phone.trim()) {
+      const contactLine = `Contact No.: ${order.storeInfo.phone.trim()}`
+      const padding = Math.max(0, Math.floor((32 - contactLine.length) / 2))
+      text += ' '.repeat(padding) + contactLine + `\n`
+      console.log('✅ SimplePrinterService - Added phone:', contactLine)
+    } else {
+      console.log('⚠️ SimplePrinterService - No phone number:', order.storeInfo?.phone)
+    }
+    
+    // Email Address (centered) - label on one line, email on next line
+    if (order.storeInfo?.email && order.storeInfo.email.trim()) {
+      const emailLabel = 'Email Address:'
+      const emailValue = order.storeInfo.email.trim()
+      // Center the label
+      const labelPadding = Math.max(0, Math.floor((32 - emailLabel.length) / 2))
+      text += ' '.repeat(labelPadding) + emailLabel + `\n`
+      // Center the email value on next line
+      const emailPadding = Math.max(0, Math.floor((32 - emailValue.length) / 2))
+      text += ' '.repeat(emailPadding) + emailValue + `\n`
+      console.log('✅ SimplePrinterService - Added email:', emailLabel, emailValue)
+    } else {
+      console.log('⚠️ SimplePrinterService - No email:', order.storeInfo?.email)
     }
     
     // Divider

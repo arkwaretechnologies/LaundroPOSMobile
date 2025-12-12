@@ -799,6 +799,38 @@ export default function OrdersScreen() {
     if (!selectedOrder) return
 
     try {
+      // Fetch fresh store data to ensure we have phone and email
+      let storeInfo = {
+        name: currentStore?.name || 'LaundroPOS',
+        address: currentStore?.address || '',
+        phone: currentStore?.phone || '',
+        email: currentStore?.email || ''
+      }
+      
+      if (currentStore?.id) {
+        try {
+          const { data: freshStoreData, error: storeError } = await supabase
+            .from('stores')
+            .select('id, name, address, phone, email')
+            .eq('id', currentStore.id)
+            .single()
+          
+          if (!storeError && freshStoreData) {
+            storeInfo = {
+              name: freshStoreData.name || 'LaundroPOS',
+              address: freshStoreData.address || '',
+              phone: freshStoreData.phone || '',
+              email: freshStoreData.email || '',
+            }
+            console.log('✅ Fetched fresh store data for printing:', storeInfo)
+          } else {
+            console.log('⚠️ Failed to fetch fresh store data, using currentStore:', storeError)
+          }
+        } catch (fetchError) {
+          console.error('❌ Error fetching store data:', fetchError)
+        }
+      }
+      
       const orderData = {
         orderId: selectedOrder.id,
         orderNumber: selectedOrder.order_number,
@@ -812,13 +844,13 @@ export default function OrdersScreen() {
           quantity: item.quantity,
           price: item.unit_price
         })) || [],
-        storeInfo: {
-          name: currentStore?.name || 'LaundroPOS',
-          address: currentStore?.address || '',
-          phone: currentStore?.phone || ''
-        }
+        storeInfo: storeInfo
       }
 
+      console.log('🖨️ Printing claim ticket from Orders screen...')
+      console.log('📋 Print order data:', JSON.stringify(orderData, null, 2))
+      console.log('📞 Store phone:', storeInfo.phone)
+      console.log('📧 Store email:', storeInfo.email)
       const success = await printerService.printOrderClaimStub(orderData)
       if (success) {
         Alert.alert('Success', 'Claim ticket printed successfully!')

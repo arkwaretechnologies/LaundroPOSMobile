@@ -10,7 +10,9 @@
     "version": "node scripts/bump-version.js",
     "version:patch": "node scripts/bump-version.js patch",
     "version:minor": "node scripts/bump-version.js minor",
-    "version:major": "node scripts/bump-version.js major"
+    "version:major": "node scripts/bump-version.js major",
+    "publish:ota": "npx expo publish",
+    "build:apk": "cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@diiix7/react-native-pos-print": "^0.1.0",

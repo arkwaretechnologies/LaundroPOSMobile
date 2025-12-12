@@ -16,6 +16,7 @@ interface Order {
     name: string
     address: string
     phone?: string
+    email?: string
   }
   orderNumber?: string
 }
@@ -234,8 +235,42 @@ class SunmiPrinterService {
 
     lines.push({ type: 'space', count: 1 })
 
+    console.log('📋 SunmiPrinterService - Generating claim stub with store info:', {
+      name: order.storeInfo?.name,
+      address: order.storeInfo?.address,
+      phone: order.storeInfo?.phone,
+      email: order.storeInfo?.email
+    })
+
+    // Store details (centered)
     if (order.storeInfo?.name) {
-      lines.push({ type: 'text', value: order.storeInfo.name.toUpperCase(), bold: true, size: 28 })
+      const storeName = order.storeInfo.name.toUpperCase()
+      lines.push({ type: 'text', value: storeName, bold: true, size: 28 })
+    }
+    
+    // Store address (centered)
+    if (order.storeInfo?.address) {
+      lines.push({ type: 'text', value: order.storeInfo.address })
+    }
+    
+    // Contact No. (centered)
+    if (order.storeInfo?.phone && order.storeInfo.phone.trim()) {
+      const contactLine = `Contact No.: ${order.storeInfo.phone.trim()}`
+      lines.push({ type: 'text', value: contactLine })
+      console.log('✅ SunmiPrinterService - Added phone:', contactLine)
+    } else {
+      console.log('⚠️ SunmiPrinterService - No phone number:', order.storeInfo?.phone)
+    }
+    
+    // Email Address (centered) - label on one line, email on next line
+    if (order.storeInfo?.email && order.storeInfo.email.trim()) {
+      const emailLabel = 'Email Address:'
+      const emailValue = order.storeInfo.email.trim()
+      lines.push({ type: 'text', value: emailLabel })
+      lines.push({ type: 'text', value: emailValue })
+      console.log('✅ SunmiPrinterService - Added email:', emailLabel, emailValue)
+    } else {
+      console.log('⚠️ SunmiPrinterService - No email:', order.storeInfo?.email)
     }
 
     lines.push({ type: 'divider' })

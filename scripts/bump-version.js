@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Custom version bumping script for Expo projects
- * Updates package.json, app.json version, and increments Android versionCode
+ * Custom version bumping script for Expo projects with OTA updates
+ * Updates package.json, app.json version, runtimeVersion (must match version), and increments Android versionCode
  */
 
 const fs = require('fs');
@@ -50,6 +50,9 @@ fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + '\n');
 // Update app.json
 appJson.expo.version = newVersion;
 
+// Update runtimeVersion (must match version for OTA updates in Bare Workflow)
+appJson.expo.runtimeVersion = newVersion;
+
 // Increment Android versionCode
 if (appJson.expo.android && appJson.expo.android.versionCode) {
   appJson.expo.android.versionCode += 1;
@@ -61,8 +64,12 @@ if (appJson.expo.android && appJson.expo.android.versionCode) {
 fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2) + '\n');
 
 console.log(`✅ Version bumped from ${currentVersion} to ${newVersion}`);
+console.log(`✅ runtimeVersion updated to ${newVersion} (matches version)`);
 console.log(`✅ Android versionCode: ${appJson.expo.android.versionCode}`);
 console.log(`\n📝 Updated files:`);
 console.log(`   - package.json`);
-console.log(`   - app.json`);
+console.log(`   - app.json (version & runtimeVersion)`);
+console.log(`\n📦 Next steps:`);
+console.log(`   - For OTA update: npm run publish:ota`);
+console.log(`   - For new native build: npm run build:apk`);
 

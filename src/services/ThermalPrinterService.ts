@@ -24,6 +24,7 @@ interface Order {
     name: string
     address: string
     phone?: string
+    email?: string
   }
   orderNumber?: string
 }
@@ -669,9 +670,52 @@ class ThermalPrinterService {
   private generateClaimStubLines(order: Order): string[] {
     const lines: string[] = []
     
-    // Store name
+    console.log('📋 Generating claim stub lines with store info:', {
+      name: order.storeInfo?.name,
+      address: order.storeInfo?.address,
+      phone: order.storeInfo?.phone,
+      email: order.storeInfo?.email
+    })
+    
+    // Store details (centered)
     if (order.storeInfo?.name) {
-      lines.push(`\n${order.storeInfo.name.toUpperCase()}\n`)
+      lines.push('\n')
+      const storeName = order.storeInfo.name.toUpperCase()
+      // Center the store name (assuming 32 character width)
+      const padding = Math.max(0, Math.floor((32 - storeName.length) / 2))
+      lines.push(' '.repeat(padding) + storeName + '\n')
+    }
+    
+    // Store address (centered)
+    if (order.storeInfo?.address) {
+      const address = order.storeInfo.address
+      const padding = Math.max(0, Math.floor((32 - address.length) / 2))
+      lines.push(' '.repeat(padding) + address + '\n')
+    }
+    
+    // Contact No. (centered)
+    if (order.storeInfo?.phone && order.storeInfo.phone.trim()) {
+      const contactLine = `Contact No.: ${order.storeInfo.phone.trim()}`
+      const padding = Math.max(0, Math.floor((32 - contactLine.length) / 2))
+      lines.push(' '.repeat(padding) + contactLine + '\n')
+      console.log('✅ Added phone to print:', contactLine)
+    } else {
+      console.log('⚠️ No phone number in storeInfo:', order.storeInfo?.phone)
+    }
+    
+    // Email Address (centered) - label on one line, email on next line
+    if (order.storeInfo?.email && order.storeInfo.email.trim()) {
+      const emailLabel = 'Email Address:'
+      const emailValue = order.storeInfo.email.trim()
+      // Center the label
+      const labelPadding = Math.max(0, Math.floor((32 - emailLabel.length) / 2))
+      lines.push(' '.repeat(labelPadding) + emailLabel + '\n')
+      // Center the email value on next line
+      const emailPadding = Math.max(0, Math.floor((32 - emailValue.length) / 2))
+      lines.push(' '.repeat(emailPadding) + emailValue + '\n')
+      console.log('✅ Added email to print:', emailLabel, emailValue)
+    } else {
+      console.log('⚠️ No email in storeInfo:', order.storeInfo?.email)
     }
     
     // Divider

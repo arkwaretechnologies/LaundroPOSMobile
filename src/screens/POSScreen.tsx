@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 import { isFeatureEnabled } from '../utils/featureFlags'
@@ -50,6 +51,7 @@ interface Customer {
 
 const POSScreen: React.FC = () => {
   const { currentStore, availableStores, switchStore } = useStore()
+  const insets = useSafeAreaInsets()
   const [services, setServices] = useState<Service[]>([])
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([])
   const [loadingServices, setLoadingServices] = useState(true)
@@ -82,6 +84,8 @@ const POSScreen: React.FC = () => {
   const [partialAmount, setPartialAmount] = useState('')
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null)
+  const [cardNumber, setCardNumber] = useState('')
+  const [referenceNumber, setReferenceNumber] = useState('')
 
   // Load services and inventory from database
   useEffect(() => {
@@ -581,12 +585,29 @@ const POSScreen: React.FC = () => {
           throw new Error('No payment method selected')
         }
 
+        // Validate required fields based on payment method
+        const methodName = selectedMethod.name.toLowerCase()
+        if (methodName === 'card' || methodName.includes('card')) {
+          if (!cardNumber.trim()) {
+            Alert.alert('Validation Error', 'Please enter Card Number for Credit/Debit Card payment')
+            return
+          }
+        } else if (methodName === 'gcash' || methodName === 'paymaya') {
+          if (!referenceNumber.trim()) {
+            Alert.alert('Validation Error', `Please enter Reference Number for ${selectedMethod.display_name} payment`)
+            return
+          }
+        }
+
         const { error: paymentError } = await supabase
           .from('payments')
           .insert({
             order_id: orderData.id,
             amount: amountPaid,
             payment_method: selectedMethod.name, // Store the method name for backward compatibility
+            payment_method_id: selectedMethod.id, // Link to payment_methods table
+            card_number: (methodName === 'card' || methodName.includes('card')) ? cardNumber.trim() : null,
+            reference_number: (methodName === 'gcash' || methodName === 'paymaya') ? referenceNumber.trim() : null,
             received_by: user.id,
             notes: `Initial ${paymentType} payment`,
           })
@@ -604,6 +625,46 @@ const POSScreen: React.FC = () => {
         // Get order date - use order_date if available, otherwise use created_at or current date
         const orderDate = orderData.order_date || orderData.created_at || new Date().toISOString()
         
+        // Fetch fresh store data to ensure we have phone and email
+        let storeInfo = undefined
+        if (currentStore) {
+          try {
+            const { data: freshStoreData, error: storeError } = await supabase
+              .from('stores')
+              .select('id, name, address, phone, email')
+              .eq('id', currentStore.id)
+              .single()
+            
+            if (!storeError && freshStoreData) {
+              storeInfo = {
+                name: freshStoreData.name || '',
+                address: freshStoreData.address || '',
+                phone: freshStoreData.phone || '',
+                email: freshStoreData.email || '',
+              }
+              console.log('✅ Fetched fresh store data for printing:', storeInfo)
+            } else {
+              // Fallback to currentStore if fetch fails
+              console.log('⚠️ Failed to fetch fresh store data, using currentStore:', storeError)
+              storeInfo = {
+                name: currentStore.name || '',
+                address: currentStore.address || '',
+                phone: currentStore.phone || '',
+                email: currentStore.email || '',
+              }
+            }
+          } catch (fetchError) {
+            console.error('❌ Error fetching store data:', fetchError)
+            // Fallback to currentStore
+            storeInfo = {
+              name: currentStore.name || '',
+              address: currentStore.address || '',
+              phone: currentStore.phone || '',
+              email: currentStore.email || '',
+            }
+          }
+        }
+        
         const printOrder = {
           orderId: orderData.id,
           orderNumber: orderData.order_number,
@@ -615,13 +676,13 @@ const POSScreen: React.FC = () => {
             quantity: item.quantity,
             price: item.price,
           })),
-          storeInfo: currentStore ? {
-            name: currentStore.name || '',
-            address: currentStore.address || '',
-          } : undefined,
+          storeInfo: storeInfo,
         }
 
         console.log('🖨️ Attempting to print claim ticket...')
+        console.log('📋 Print order data:', JSON.stringify(printOrder, null, 2))
+        console.log('📞 Store phone:', storeInfo?.phone)
+        console.log('📧 Store email:', storeInfo?.email)
         const printSuccess = await ThermalPrinterService.getInstance().printOrderClaimStub(printOrder)
         
         if (printSuccess) {
@@ -648,6 +709,8 @@ const POSScreen: React.FC = () => {
               setShowPaymentModal(false)
               setPartialAmount('')
               setPaymentType('full')
+              setCardNumber('')
+              setReferenceNumber('')
               // Reset to first payment method
               if (paymentMethods.length > 0) {
                 setSelectedPaymentMethodId(paymentMethods[0].id)
@@ -1092,14 +1155,18 @@ const POSScreen: React.FC = () => {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Payment Details</Text>
-              <TouchableOpacity onPress={() => setShowPaymentModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setShowPaymentModal(false)
+                setCardNumber('')
+                setReferenceNumber('')
+              }}>
                 <Ionicons name="close" size={24} color="#6b7280" />
             </TouchableOpacity>
         </View>
 
             <ScrollView 
               style={styles.modalScrollContent}
-              contentContainerStyle={styles.modalScrollContainer}
+              contentContainerStyle={[styles.modalScrollContainer, { paddingBottom: 10 }]}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
@@ -1176,7 +1243,12 @@ const POSScreen: React.FC = () => {
                         styles.paymentMethodButton, 
                         selectedPaymentMethodId === method.id && styles.paymentMethodSelected
                       ]}
-                      onPress={() => setSelectedPaymentMethodId(method.id)}
+                      onPress={() => {
+                        setSelectedPaymentMethodId(method.id)
+                        // Clear fields when switching payment methods
+                        setCardNumber('')
+                        setReferenceNumber('')
+                      }}
                     >
                       {method.icon && (
                         <Ionicons 
@@ -1198,6 +1270,61 @@ const POSScreen: React.FC = () => {
               )}
             </View>
 
+            {/* Card Number Input - Show for Credit/Debit Card */}
+            {selectedPaymentMethodId && (() => {
+              const selectedMethod = paymentMethods.find(m => m.id === selectedPaymentMethodId)
+              const methodName = selectedMethod?.name.toLowerCase() || ''
+              const isCard = methodName === 'card' || methodName.includes('card')
+              
+              if (isCard && paymentType !== 'later') {
+                return (
+                  <View style={styles.paymentSection}>
+                    <Text style={styles.paymentSectionTitle}>Card Number</Text>
+                    <TextInput
+                      style={styles.paymentDetailInput}
+                      value={cardNumber}
+                      onChangeText={setCardNumber}
+                      placeholder="Enter card number (last 4 digits or full)"
+                      keyboardType="numeric"
+                      maxLength={19}
+                      autoCapitalize="none"
+                    />
+                    <Text style={styles.paymentDetailHint}>
+                      Enter the last 4 digits or full card number
+                    </Text>
+                  </View>
+                )
+              }
+              return null
+            })()}
+
+            {/* Reference Number Input - Show for GCash/PayMaya */}
+            {selectedPaymentMethodId && (() => {
+              const selectedMethod = paymentMethods.find(m => m.id === selectedPaymentMethodId)
+              const methodName = selectedMethod?.name.toLowerCase() || ''
+              const isDigitalWallet = methodName === 'gcash' || methodName === 'paymaya'
+              
+              if (isDigitalWallet && paymentType !== 'later') {
+                return (
+                  <View style={styles.paymentSection}>
+                    <Text style={styles.paymentSectionTitle}>Reference Number</Text>
+                    <TextInput
+                      style={styles.paymentDetailInput}
+                      value={referenceNumber}
+                      onChangeText={setReferenceNumber}
+                      placeholder={`Enter ${selectedMethod?.display_name} reference number`}
+                      keyboardType="default"
+                      autoCapitalize="none"
+                    />
+                    <Text style={styles.paymentDetailHint}>
+                      Enter the transaction reference number from {selectedMethod?.display_name}
+                    </Text>
+                  </View>
+                )
+              }
+              return null
+            })()}
+
             {/* Balance Due */}
             {paymentType !== 'full' && (
               <View style={styles.balanceSection}>
@@ -1207,12 +1334,17 @@ const POSScreen: React.FC = () => {
                 </Text>
           </View>
         )}
+            </ScrollView>
 
-            {/* Action Buttons */}
-            <View style={styles.modalActions}>
+            {/* Action Buttons - Fixed at bottom */}
+            <View style={[styles.modalActions, { paddingBottom: Math.max(insets.bottom, 20) }]}>
               <TouchableOpacity 
                 style={styles.cancelButton}
-                onPress={() => setShowPaymentModal(false)}
+                onPress={() => {
+                  setShowPaymentModal(false)
+                  setCardNumber('')
+                  setReferenceNumber('')
+                }}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
         </TouchableOpacity>
@@ -1223,7 +1355,6 @@ const POSScreen: React.FC = () => {
                 <Text style={styles.processButtonText}>Process Payment</Text>
               </TouchableOpacity>
             </View>
-            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -1560,12 +1691,14 @@ const styles = StyleSheet.create({
     width: '100%',
     maxHeight: '85%',
     minHeight: '60%',
+    flexDirection: 'column',
   },
   modalScrollContent: {
     flex: 1,
+    flexShrink: 1,
   },
   modalScrollContainer: {
-    paddingBottom: 20,
+    paddingBottom: 10,
   },
   modalContentLarge: {
     backgroundColor: '#ffffff',
@@ -1733,7 +1866,11 @@ const styles = StyleSheet.create({
   modalActions: {
     flexDirection: 'row',
     padding: 20,
+    paddingTop: 16,
     gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
   },
   cancelButton: {
     flex: 1,
@@ -2036,6 +2173,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6b7280',
     marginTop: 4,
+  },
+  paymentDetailInput: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#111827',
+    backgroundColor: '#ffffff',
+    marginTop: 8,
+  },
+  paymentDetailHint: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 6,
+    fontStyle: 'italic',
   },
 })
 

@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useStore } from '../context/StoreContext'
 import PrinterConfigScreen from './PrinterConfigScreen'
+import * as Updates from 'expo-updates'
+import Constants from 'expo-constants'
 
 interface SettingsScreenProps {
   navigation?: {
@@ -27,6 +29,8 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showPrinterConfig, setShowPrinterConfig] = useState(false)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false)
 
   useEffect(() => {
     fetchUserData()
@@ -83,8 +87,9 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
       items: [
         { icon: 'help-circle', title: 'Help Center', subtitle: 'FAQs and guides', color: '#3b82f6' },
         { icon: 'chatbubble', title: 'Contact Support', subtitle: 'Get help from our team', color: '#10b981' },
+        { icon: 'cloud-download', title: 'Check for Updates', subtitle: `Version ${Constants.expoConfig?.version || '1.1.0'}`, color: '#06b6d4', action: 'checkUpdates' },
         { icon: 'document-text', title: 'Terms & Privacy', subtitle: 'Legal information', color: '#6b7280' },
-        { icon: 'information-circle', title: 'About', subtitle: 'Version 1.0.0', color: '#f59e0b' },
+        { icon: 'information-circle', title: 'About', subtitle: `Version ${Constants.expoConfig?.version || '1.1.0'}`, color: '#f59e0b' },
       ]
     }
   ]
@@ -102,6 +107,8 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
         return
       }
       setShowStoreSwitchModal(true)
+    } else if (item.action === 'checkUpdates') {
+      checkForUpdates()
     }
   }
 
@@ -144,6 +151,103 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     }
   }
 
+  const checkForUpdates = async () => {
+    // Prevent multiple simultaneous checks
+    if (checkingUpdate || downloadingUpdate) {
+      return
+    }
+
+    try {
+      setCheckingUpdate(true)
+
+      // Check if in development mode
+      if (__DEV__) {
+        Alert.alert(
+          'Updates Not Available',
+          'Updates are only available in production builds. Please build the app using EAS Build to test updates.',
+          [{ text: 'OK' }]
+        )
+        setCheckingUpdate(false)
+        return
+      }
+
+      // Check for available updates
+      // Note: Updates.isEnabled may be false for locally built APKs
+      // We'll let the actual check handle errors gracefully
+      const update = await Updates.checkForUpdateAsync()
+
+      if (update.isAvailable) {
+        // Update available - ask user if they want to download
+        Alert.alert(
+          'Update Available',
+          'A new version of the app is available. Would you like to download it now?',
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+              onPress: () => setCheckingUpdate(false),
+            },
+            {
+              text: 'Download',
+              onPress: async () => {
+                try {
+                  setCheckingUpdate(false)
+                  setDownloadingUpdate(true)
+
+                  // Download the update
+                  await Updates.fetchUpdateAsync()
+
+                  setDownloadingUpdate(false)
+
+                  // Ask user to reload
+                  Alert.alert(
+                    'Update Downloaded',
+                    'The update has been downloaded successfully. The app will reload to apply the update.',
+                    [
+                      {
+                        text: 'Reload Now',
+                        onPress: () => {
+                          Updates.reloadAsync()
+                        },
+                      },
+                      {
+                        text: 'Later',
+                        style: 'cancel',
+                      },
+                    ]
+                  )
+                } catch (error: any) {
+                  setDownloadingUpdate(false)
+                  console.error('Error downloading update:', error)
+                  Alert.alert(
+                    'Download Failed',
+                    `Failed to download update: ${error.message || 'Unknown error'}. Please try again later.`,
+                    [{ text: 'OK' }]
+                  )
+                }
+              },
+            },
+          ]
+        )
+      } else {
+        setCheckingUpdate(false)
+        Alert.alert(
+          'Up to Date',
+          'You are using the latest version of the app.',
+          [{ text: 'OK' }]
+        )
+      }
+    } catch (error: any) {
+      setCheckingUpdate(false)
+      console.error('Error checking for updates:', error)
+      Alert.alert(
+        'Update Check Failed',
+        `Failed to check for updates: ${error.message || 'Unknown error'}. Please try again later.`,
+        [{ text: 'OK' }]
+      )
+    }
+  }
+
   const renderSettingItem = (item: any) => {
     return (
       <TouchableOpacity 
@@ -168,6 +272,8 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
               trackColor={{ false: '#d1d5db', true: `${item.color}50` }}
               thumbColor={item.value ? item.color : '#ffffff'}
             />
+          ) : item.action === 'checkUpdates' && (checkingUpdate || downloadingUpdate) ? (
+            <ActivityIndicator size="small" color={item.color} />
           ) : (
             <Ionicons name="chevron-forward" size={20} color="#d1d5db" />
           )}

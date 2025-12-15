@@ -1,6 +1,6 @@
 {
   "name": "laundroposmobile",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
@@ -11,7 +11,9 @@
     "version:patch": "node scripts/bump-version.js patch",
     "version:minor": "node scripts/bump-version.js minor",
     "version:major": "node scripts/bump-version.js major",
-    "publish:ota": "npx expo publish",
+    "update:production": "eas update --branch production --message",
+    "update:preview": "eas update --branch preview --message",
+    "publish:ota": "eas update --branch production --message \"OTA Update\"",
     "build:apk": "cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
@@ -30,6 +32,7 @@
     "expo-print": "^15.0.8",
     "expo-sharing": "^14.0.8",
     "expo-status-bar": "~3.0.8",
+    "expo-updates": "~29.0.15",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.4",

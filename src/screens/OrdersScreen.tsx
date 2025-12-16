@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 import ThermalPrinterService from '../services/ThermalPrinterService'
+import { sendOrderReadySMS } from '../services/SMSService'
 import QRCodeDisplay from '../components/QRCodeDisplay'
 import QRScanner from '../components/QRScanner'
 import { useNotifications } from '../context/NotificationContext'
@@ -580,6 +581,33 @@ export default function OrdersScreen() {
         .eq('store_id', currentStore.id) // Additional safety: ensure order belongs to current store
 
       if (error) throw error
+
+      // Send SMS notification when order is marked as ready
+      if (newStatus === 'ready' && order.customers?.phone && order.customers.phone.trim() !== '') {
+        const customerName = order.customers.first_name && order.customers.last_name
+          ? `${order.customers.first_name} ${order.customers.last_name}`
+          : order.customers.first_name || order.customers.last_name || 'Customer'
+        
+        const customerPhone = order.customers.phone.trim()
+        console.log(`📱 Preparing to send SMS to customer ${customerName} at ${customerPhone}`)
+        
+        const smsSent = await sendOrderReadySMS({
+          phoneNumber: customerPhone,
+          customerName,
+          orderNumber: order.order_number,
+          storeName: currentStore.name || 'our store'
+        })
+
+        if (!smsSent) {
+          Alert.alert(
+            'Warning',
+            'Order status updated successfully, but failed to send SMS notification to customer.',
+            [{ text: 'OK' }]
+          )
+        }
+      } else if (newStatus === 'ready' && (!order.customers || !order.customers.phone || order.customers.phone.trim() === '')) {
+        console.log('⚠️ Cannot send SMS: Customer phone number not available')
+      }
 
       Alert.alert('Success', `Order status updated to ${formatStatusText(newStatus)}`)
       loadOrders()

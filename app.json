@@ -33,11 +33,7 @@
         "WRITE_EXTERNAL_STORAGE",
         "INTERNET",
         "ACCESS_NETWORK_STATE",
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE",
-        "INTERNET",
-        "ACCESS_NETWORK_STATE"
+        "SEND_SMS"
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Modal, Alert, Platform } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Modal, Alert, Platform, TextInput } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import RNFS from 'react-native-fs'
@@ -23,12 +23,27 @@ interface ReportStats {
   customerChange: number
 }
 
+interface Transaction {
+  id: string
+  order_id: string
+  amount: number
+  payment_method: string
+  payment_date: string
+  reference_number: string | null
+  card_number: string | null
+  is_cancelled: boolean
+  cancelled_at: string | null
+  order_number?: string
+  customer_name?: string
+}
+
 interface ReportData {
   salesReport?: any
   orderSummary?: any
   customerAnalytics?: any
   servicePerformance?: any
   revenueTrends?: any
+  transactions?: Transaction[]
 }
 
 const ReportsScreen: React.FC = () => {
@@ -39,6 +54,9 @@ const ReportsScreen: React.FC = () => {
   const [selectedReport, setSelectedReport] = useState<string | null>(null)
   const [reportData, setReportData] = useState<ReportData>({})
   const [reportLoading, setReportLoading] = useState(false)
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [cancellationReason, setCancellationReason] = useState('')
   const [stats, setStats] = useState<ReportStats>({
     dailySales: 0,
     weeklySales: 0,
@@ -334,6 +352,9 @@ const ReportsScreen: React.FC = () => {
         case 'revenue':
           await loadRevenueTrends()
           break
+        case 'transactions':
+          await loadTransactions()
+          break
         case 'export':
           handleExportData()
           return
@@ -374,12 +395,13 @@ const ReportsScreen: React.FC = () => {
       return
     }
 
-    // Get payments for these orders
+    // Get payments for these orders (exclude cancelled)
     const { data: payments, error: paymentsError } = await supabase
       .from('payments')
       .select('amount, payment_method, payment_date, order_id')
       .in('order_id', orderIds)
       .gte('payment_date', monthStart.toISOString())
+      .or('is_cancelled.eq.false,is_cancelled.is.null')
 
     if (paymentsError) throw paymentsError
 
@@ -401,6 +423,7 @@ const ReportsScreen: React.FC = () => {
       .select('amount, payment_date, order_id')
       .in('order_id', orderIds)
       .gte('payment_date', sevenDaysAgo.toISOString())
+      .or('is_cancelled.eq.false,is_cancelled.is.null')
 
     if (recentError) throw recentError
 
@@ -627,6 +650,7 @@ const ReportsScreen: React.FC = () => {
       .select('amount, payment_date, order_id')
       .in('order_id', orderIds)
       .gte('payment_date', thirtyDaysAgo.toISOString())
+      .or('is_cancelled.eq.false,is_cancelled.is.null')
       .order('payment_date', { ascending: true })
 
     if (paymentsError) throw paymentsError
@@ -673,6 +697,154 @@ const ReportsScreen: React.FC = () => {
         total: storePayments.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0),
       }
     })
+  }
+
+  const loadTransactions = async () => {
+    if (!currentStore) return
+
+    try {
+      // Get orders for this store first
+      const { data: storeOrders, error: ordersError } = await supabase
+        .from('orders')
+        .select('id, order_number, customer_id, customers(first_name, last_name)')
+        .eq('store_id', currentStore.id)
+
+      if (ordersError) throw ordersError
+
+      const orderIds = storeOrders?.map(o => o.id) || []
+      const orderMap: Record<string, { order_number: string; customer_name: string }> = {}
+      
+      storeOrders?.forEach(order => {
+        orderMap[order.id] = {
+          order_number: order.order_number,
+          customer_name: order.customers 
+            ? `${order.customers.first_name} ${order.customers.last_name}`.trim()
+            : 'Walk-in Customer'
+        }
+      })
+
+      if (orderIds.length === 0) {
+        setReportData({
+          ...reportData,
+          transactions: []
+        })
+        return
+      }
+
+      // Get recent payments (last 30 days, not cancelled)
+      const thirtyDaysAgo = new Date()
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+      const { data: payments, error: paymentsError } = await supabase
+        .from('payments')
+        .select('id, order_id, amount, payment_method, payment_date, reference_number, card_number, is_cancelled, cancelled_at')
+        .in('order_id', orderIds)
+        .gte('payment_date', thirtyDaysAgo.toISOString())
+        .order('payment_date', { ascending: false })
+        .limit(100)
+
+      if (paymentsError) throw paymentsError
+
+      const transactions: Transaction[] = (payments || []).map((payment: any) => ({
+        id: payment.id,
+        order_id: payment.order_id,
+        amount: payment.amount,
+        payment_method: payment.payment_method,
+        payment_date: payment.payment_date,
+        reference_number: payment.reference_number,
+        card_number: payment.card_number,
+        is_cancelled: payment.is_cancelled || false,
+        cancelled_at: payment.cancelled_at,
+        order_number: orderMap[payment.order_id]?.order_number || 'N/A',
+        customer_name: orderMap[payment.order_id]?.customer_name || 'Unknown'
+      }))
+
+      setReportData({
+        ...reportData,
+        transactions
+      })
+    } catch (error: any) {
+      console.error('Error loading transactions:', error)
+      Alert.alert('Error', 'Failed to load transactions')
+    }
+  }
+
+  const handleCancelTransaction = async () => {
+    if (!selectedTransaction || !currentStore) {
+      Alert.alert('Error', 'No transaction selected')
+      return
+    }
+
+    if (!cancellationReason.trim()) {
+      Alert.alert('Required Field', 'Please provide a cancellation reason')
+      return
+    }
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        Alert.alert('Error', 'User not authenticated')
+        return
+      }
+
+      // Update payment to mark as cancelled
+      const { error: updateError } = await supabase
+        .from('payments')
+        .update({
+          is_cancelled: true,
+          cancelled_at: new Date().toISOString(),
+          cancelled_by: user.id,
+          cancellation_reason: cancellationReason.trim()
+        })
+        .eq('id', selectedTransaction.id)
+
+      if (updateError) throw updateError
+
+      // Get the order to update paid_amount
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select('paid_amount, total_amount')
+        .eq('id', selectedTransaction.order_id)
+        .single()
+
+      if (orderError) throw orderError
+
+      // Calculate new paid_amount (subtract cancelled payment)
+      const newPaidAmount = Math.max(0, (orderData.paid_amount || 0) - selectedTransaction.amount)
+      
+      // Determine new payment_status
+      let newPaymentStatus = 'unpaid'
+      if (newPaidAmount > 0 && newPaidAmount < orderData.total_amount) {
+        newPaymentStatus = 'partial'
+      } else if (newPaidAmount >= orderData.total_amount) {
+        newPaymentStatus = 'paid'
+      }
+
+      // Update order's paid_amount and payment_status
+      const { error: orderUpdateError } = await supabase
+        .from('orders')
+        .update({
+          paid_amount: newPaidAmount,
+          payment_status: newPaymentStatus
+        })
+        .eq('id', selectedTransaction.order_id)
+
+      if (orderUpdateError) throw orderUpdateError
+
+      Alert.alert('Success', 'Transaction cancelled successfully')
+      
+      // Reset form and close modal
+      setCancellationReason('')
+      setShowCancelModal(false)
+      setSelectedTransaction(null)
+      
+      // Reload transactions and report data
+      await loadTransactions()
+      await loadReportData()
+    } catch (error: any) {
+      console.error('Error cancelling transaction:', error)
+      Alert.alert('Error', `Failed to cancel transaction: ${error.message}`)
+    }
   }
 
   const handleExportData = async () => {
@@ -1174,11 +1346,12 @@ const ReportsScreen: React.FC = () => {
     { id: 'customers', title: 'Customer Analytics', icon: 'people', color: '#f59e0b' },
     { id: 'services', title: 'Service Performance', icon: 'analytics', color: '#8b5cf6' },
     { id: 'revenue', title: 'Revenue Trends', icon: 'bar-chart', color: '#06b6d4' },
+    { id: 'transactions', title: 'Transactions', icon: 'card', color: '#ef4444' },
     { id: 'export', title: 'Export Data', icon: 'download', color: '#6b7280' },
   ]
 
   if (loading && !refreshing) {
-    return (
+  return (
       <View style={[styles.container, styles.centerContent]}>
         <ActivityIndicator size="large" color="#3b82f6" />
         <Text style={styles.loadingText}>Loading reports...</Text>
@@ -1268,7 +1441,7 @@ const ReportsScreen: React.FC = () => {
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#3b82f6" />
                 <Text style={styles.loadingText}>Loading report data...</Text>
-              </View>
+            </View>
             ) : (
               <ScrollView 
                 style={styles.modalBody}
@@ -1279,7 +1452,7 @@ const ReportsScreen: React.FC = () => {
                     <View style={styles.reportSection}>
                       <Text style={styles.reportSectionTitle}>Total Sales (This Month)</Text>
                       <Text style={styles.reportValue}>{formatCurrency(reportData.salesReport.total)}</Text>
-                    </View>
+          </View>
 
                     <View style={styles.reportSection}>
                       <Text style={styles.reportSectionTitle}>Sales by Payment Method</Text>
@@ -1287,9 +1460,9 @@ const ReportsScreen: React.FC = () => {
                         <View key={method} style={styles.reportRow}>
                           <Text style={styles.reportLabel}>{method.toUpperCase()}</Text>
                           <Text style={styles.reportAmount}>{formatCurrency(amount as number)}</Text>
-                        </View>
+            </View>
                       ))}
-                    </View>
+            </View>
 
                     <View style={styles.reportSection}>
                       <Text style={styles.reportSectionTitle}>Daily Sales (Last 7 Days)</Text>
@@ -1447,10 +1620,194 @@ const ReportsScreen: React.FC = () => {
                     </View>
                   </View>
                 )}
+
+                {selectedReport === 'transactions' && reportData.transactions && (
+                  <View>
+                    <View style={styles.reportSection}>
+                      <Text style={styles.reportSectionTitle}>Recent Transactions (Last 30 Days)</Text>
+                      <Text style={styles.reportSubtext}>
+                        {reportData.transactions.length} transactions found
+                      </Text>
+                    </View>
+
+                    {reportData.transactions.length === 0 ? (
+                      <View style={styles.emptyState}>
+                        <Text style={styles.emptyStateText}>No transactions found</Text>
+                      </View>
+                    ) : (
+                      reportData.transactions.map((transaction) => (
+                        <View key={transaction.id} style={styles.transactionCard}>
+                          <View style={styles.transactionHeader}>
+                            <View style={styles.transactionInfo}>
+                              <Text style={styles.transactionOrderNumber}>
+                                Order: {transaction.order_number}
+                              </Text>
+                              <Text style={styles.transactionCustomer}>
+                                {transaction.customer_name}
+                              </Text>
+                            </View>
+                            <View style={styles.transactionAmountContainer}>
+                              <Text style={[
+                                styles.transactionAmount,
+                                transaction.is_cancelled && styles.cancelledAmount
+                              ]}>
+                                {formatCurrency(transaction.amount)}
+                              </Text>
+                              {transaction.is_cancelled && (
+                                <Text style={styles.cancelledBadge}>CANCELLED</Text>
+                              )}
+                            </View>
+                          </View>
+                          
+                          <View style={styles.transactionDetails}>
+                            <Text style={styles.transactionDetail}>
+                              Method: {transaction.payment_method.toUpperCase()}
+                            </Text>
+                            <Text style={styles.transactionDetail}>
+                              Date: {new Date(transaction.payment_date).toLocaleString()}
+                            </Text>
+                            {transaction.reference_number && (
+                              <Text style={styles.transactionDetail}>
+                                Ref: {transaction.reference_number}
+                              </Text>
+                            )}
+                            {transaction.card_number && (
+                              <Text style={styles.transactionDetail}>
+                                Card: {transaction.card_number}
+                              </Text>
+                            )}
+                            {transaction.is_cancelled && transaction.cancelled_at && (
+                              <Text style={[styles.transactionDetail, styles.cancelledText]}>
+                                Cancelled: {new Date(transaction.cancelled_at).toLocaleString()}
+                              </Text>
+                            )}
+                          </View>
+
+                          {!transaction.is_cancelled && (
+                            <TouchableOpacity
+                              style={styles.cancelTransactionButton}
+                              onPress={() => {
+                                setSelectedTransaction(transaction)
+                                setShowCancelModal(true)
+                              }}
+                            >
+                              <Ionicons name="close-circle" size={18} color="#ef4444" />
+                              <Text style={styles.cancelTransactionText}>Cancel Transaction</Text>
+            </TouchableOpacity>
+                          )}
+          </View>
+                      ))
+                    )}
+                  </View>
+                )}
               </ScrollView>
             )}
           </View>
         </View>
+      </Modal>
+
+      {/* Cancel Transaction Modal */}
+      <Modal
+        visible={showCancelModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowCancelModal(false)
+          setCancellationReason('')
+          setSelectedTransaction(null)
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Cancel Transaction</Text>
+              <TouchableOpacity onPress={() => {
+                setShowCancelModal(false)
+                setCancellationReason('')
+                setSelectedTransaction(null)
+              }}>
+                <Ionicons name="close" size={24} color="#111827" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: 10 }}>
+              {selectedTransaction && (
+                <>
+                  <View style={styles.cancelTransactionInfo}>
+                    <View style={styles.cancelTransactionInfoRow}>
+                      <Text style={styles.cancelTransactionLabel}>Order Number:</Text>
+                      <Text style={styles.cancelTransactionValue}>
+                        {selectedTransaction.order_number}
+                      </Text>
+            </View>
+                    <View style={styles.cancelTransactionInfoRow}>
+                      <Text style={styles.cancelTransactionLabel}>Customer:</Text>
+                      <Text style={styles.cancelTransactionValue}>
+                        {selectedTransaction.customer_name}
+                      </Text>
+                    </View>
+                    <View style={styles.cancelTransactionInfoRow}>
+                      <Text style={styles.cancelTransactionLabel}>Amount:</Text>
+                      <Text style={styles.cancelTransactionValue}>
+                        {formatCurrency(selectedTransaction.amount)}
+                      </Text>
+                    </View>
+                    <View style={styles.cancelTransactionInfoRow}>
+                      <Text style={styles.cancelTransactionLabel}>Payment Method:</Text>
+                      <Text style={styles.cancelTransactionValue}>
+                        {selectedTransaction.payment_method.toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={[styles.cancelTransactionInfoRow, styles.refundWarning]}>
+                      <Ionicons name="warning" size={20} color="#f59e0b" />
+                      <Text style={styles.refundWarningText}>
+                        This will reduce the order's paid amount and may change the payment status.
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Cancellation Reason *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="Enter reason for cancellation"
+                      value={cancellationReason}
+                      onChangeText={setCancellationReason}
+                      multiline
+                      numberOfLines={3}
+                    />
+                  </View>
+
+                  <View style={styles.cancelWarningBox}>
+                    <Ionicons name="alert-circle" size={20} color="#ef4444" />
+                    <Text style={styles.cancelWarningText}>
+                      This action cannot be undone. The payment will be marked as cancelled and the order's payment status will be updated.
+                    </Text>
+                  </View>
+                </>
+              )}
+            </ScrollView>
+
+            <View style={[styles.modalActions, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => {
+                  setShowCancelModal(false)
+                  setCancellationReason('')
+                  setSelectedTransaction(null)
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={handleCancelTransaction}
+              >
+                <Text style={styles.submitButtonText}>Confirm Cancellation</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
       </Modal>
     </ScrollView>
   )
@@ -1683,6 +2040,200 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+  },
+  emptyState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#9ca3af',
+  },
+  transactionCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  transactionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  transactionInfo: {
+    flex: 1,
+  },
+  transactionOrderNumber: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  transactionCustomer: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  transactionAmountContainer: {
+    alignItems: 'flex-end',
+  },
+  transactionAmount: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#10b981',
+    marginBottom: 4,
+  },
+  cancelledAmount: {
+    color: '#ef4444',
+    textDecorationLine: 'line-through',
+  },
+  cancelledBadge: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#ef4444',
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  transactionDetails: {
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
+  },
+  transactionDetail: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 4,
+  },
+  cancelledText: {
+    color: '#ef4444',
+    fontWeight: '500',
+  },
+  cancelTransactionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    paddingVertical: 10,
+    backgroundColor: '#fee2e2',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+  },
+  cancelTransactionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ef4444',
+    marginLeft: 6,
+  },
+  cancelTransactionInfo: {
+    marginBottom: 20,
+  },
+  cancelTransactionInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  cancelTransactionLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+    flex: 1,
+  },
+  cancelTransactionValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    flex: 1,
+    textAlign: 'right',
+  },
+  refundWarning: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#fffbeb',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+  refundWarningText: {
+    fontSize: 13,
+    color: '#92400e',
+    marginLeft: 8,
+    flex: 1,
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    color: '#111827',
+    backgroundColor: '#ffffff',
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  cancelWarningBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 12,
+    backgroundColor: '#fee2e2',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    marginBottom: 12,
+  },
+  cancelWarningText: {
+    fontSize: 13,
+    color: '#991b1b',
+    marginLeft: 8,
+    flex: 1,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  submitButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+  },
+  submitButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 })
 

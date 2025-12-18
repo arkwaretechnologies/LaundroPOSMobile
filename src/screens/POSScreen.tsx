@@ -616,86 +616,7 @@ const POSScreen: React.FC = () => {
         console.log('Payment recorded:', amountPaid)
       }
 
-      // Print claim ticket
-      try {
-        const customerName = selectedCustomer 
-          ? `${selectedCustomer.first_name} ${selectedCustomer.last_name}`.trim()
-          : 'Walk-in Customer'
-        
-        // Get order date - use order_date if available, otherwise use created_at or current date
-        const orderDate = orderData.order_date || orderData.created_at || new Date().toISOString()
-        
-        // Fetch fresh store data to ensure we have phone and email
-        let storeInfo = undefined
-        if (currentStore) {
-          try {
-            const { data: freshStoreData, error: storeError } = await supabase
-              .from('stores')
-              .select('id, name, address, phone, email')
-              .eq('id', currentStore.id)
-              .single()
-            
-            if (!storeError && freshStoreData) {
-              storeInfo = {
-                name: freshStoreData.name || '',
-                address: freshStoreData.address || '',
-                phone: freshStoreData.phone || '',
-                email: freshStoreData.email || '',
-              }
-              console.log('✅ Fetched fresh store data for printing:', storeInfo)
-            } else {
-              // Fallback to currentStore if fetch fails
-              console.log('⚠️ Failed to fetch fresh store data, using currentStore:', storeError)
-              storeInfo = {
-                name: currentStore.name || '',
-                address: currentStore.address || '',
-                phone: currentStore.phone || '',
-                email: currentStore.email || '',
-              }
-            }
-          } catch (fetchError) {
-            console.error('❌ Error fetching store data:', fetchError)
-            // Fallback to currentStore
-            storeInfo = {
-              name: currentStore.name || '',
-              address: currentStore.address || '',
-              phone: currentStore.phone || '',
-              email: currentStore.email || '',
-            }
-          }
-        }
-        
-        const printOrder = {
-          orderId: orderData.id,
-          orderNumber: orderData.order_number,
-          customerName: customerName,
-          orderDate: orderDate,
-          totalAmount: totalAmount,
-          items: cart.map(item => ({
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price,
-          })),
-          storeInfo: storeInfo,
-        }
-
-        console.log('🖨️ Attempting to print claim ticket...')
-        console.log('📋 Print order data:', JSON.stringify(printOrder, null, 2))
-        console.log('📞 Store phone:', storeInfo?.phone)
-        console.log('📧 Store email:', storeInfo?.email)
-        const printSuccess = await ThermalPrinterService.getInstance().printOrderClaimStub(printOrder)
-        
-        if (printSuccess) {
-          console.log('✅ Claim ticket printed successfully')
-        } else {
-          console.log('⚠️ Claim ticket printing failed or printer not available')
-        }
-      } catch (printError: any) {
-        // Don't block the success flow if printing fails
-        console.error('❌ Error printing claim ticket:', printError)
-      }
-
-      // Show success message
+      // Show success message first
       Alert.alert(
         'Order Created Successfully!', 
         `Order Number: ${orderData.order_number}\nTotal: ₱${totalAmount.toFixed(2)}\nPaid: ₱${amountPaid.toFixed(2)}\nBalance: ₱${balanceDue.toFixed(2)}`,
@@ -703,18 +624,129 @@ const POSScreen: React.FC = () => {
           {
             text: 'OK',
             onPress: () => {
-              // Reset form
-              setCart([])
-              setSelectedCustomer(null)
-              setShowPaymentModal(false)
-              setPartialAmount('')
-              setPaymentType('full')
-              setCardNumber('')
-              setReferenceNumber('')
-              // Reset to first payment method
-              if (paymentMethods.length > 0) {
-                setSelectedPaymentMethodId(paymentMethods[0].id)
-              }
+              // Prompt to print claim ticket after success
+              Alert.alert(
+                'Print Claim Ticket',
+                'Would you like to print the claim ticket?',
+                [
+                  {
+                    text: 'Cancel',
+                    style: 'cancel',
+                    onPress: () => {
+                      // Reset form
+                      setCart([])
+                      setSelectedCustomer(null)
+                      setShowPaymentModal(false)
+                      setPartialAmount('')
+                      setPaymentType('full')
+                      setCardNumber('')
+                      setReferenceNumber('')
+                      // Reset to first payment method
+                      if (paymentMethods.length > 0) {
+                        setSelectedPaymentMethodId(paymentMethods[0].id)
+                      }
+                    }
+                  },
+                  {
+                    text: 'Print',
+                    onPress: async () => {
+                      // Print claim ticket
+                      try {
+                        const customerName = selectedCustomer 
+                          ? `${selectedCustomer.first_name} ${selectedCustomer.last_name}`.trim()
+                          : 'Walk-in Customer'
+                        
+                        // Get order date - use order_date if available, otherwise use created_at or current date
+                        const orderDate = orderData.order_date || orderData.created_at || new Date().toISOString()
+                        
+                        // Fetch fresh store data to ensure we have phone and email
+                        let storeInfo = undefined
+                        if (currentStore) {
+                          try {
+                            const { data: freshStoreData, error: storeError } = await supabase
+                              .from('stores')
+                              .select('id, name, address, phone, email')
+                              .eq('id', currentStore.id)
+                              .single()
+                            
+                            if (!storeError && freshStoreData) {
+                              storeInfo = {
+                                name: freshStoreData.name || '',
+                                address: freshStoreData.address || '',
+                                phone: freshStoreData.phone || '',
+                                email: freshStoreData.email || '',
+                              }
+                              console.log('✅ Fetched fresh store data for printing:', storeInfo)
+                            } else {
+                              // Fallback to currentStore if fetch fails
+                              console.log('⚠️ Failed to fetch fresh store data, using currentStore:', storeError)
+                              storeInfo = {
+                                name: currentStore.name || '',
+                                address: currentStore.address || '',
+                                phone: currentStore.phone || '',
+                                email: currentStore.email || '',
+                              }
+                            }
+                          } catch (fetchError) {
+                            console.error('❌ Error fetching store data:', fetchError)
+                            // Fallback to currentStore
+                            storeInfo = {
+                              name: currentStore.name || '',
+                              address: currentStore.address || '',
+                              phone: currentStore.phone || '',
+                              email: currentStore.email || '',
+                            }
+                          }
+                        }
+                        
+                        const printOrder = {
+                          orderId: orderData.id,
+                          orderNumber: orderData.order_number,
+                          customerName: customerName,
+                          orderDate: orderDate,
+                          totalAmount: totalAmount,
+                          items: cart.map(item => ({
+                            name: item.name,
+                            quantity: item.quantity,
+                            price: item.price,
+                          })),
+                          storeInfo: storeInfo,
+                        }
+
+                        console.log('🖨️ Attempting to print claim ticket...')
+                        console.log('📋 Print order data:', JSON.stringify(printOrder, null, 2))
+                        console.log('📞 Store phone:', storeInfo?.phone)
+                        console.log('📧 Store email:', storeInfo?.email)
+                        const printSuccess = await ThermalPrinterService.getInstance().printOrderClaimStub(printOrder)
+                        
+                        if (printSuccess) {
+                          console.log('✅ Claim ticket printed successfully')
+                          Alert.alert('Success', 'Claim ticket printed successfully!')
+                        } else {
+                          console.log('⚠️ Claim ticket printing failed or printer not available')
+                          Alert.alert('Print Failed', 'Failed to print claim ticket. Please check your printer connection.')
+                        }
+                      } catch (printError: any) {
+                        console.error('❌ Error printing claim ticket:', printError)
+                        Alert.alert('Print Error', `Failed to print claim ticket: ${printError.message || 'Unknown error'}`)
+                      } finally {
+                        // Reset form after printing attempt
+                        setCart([])
+                        setSelectedCustomer(null)
+                        setShowPaymentModal(false)
+                        setPartialAmount('')
+                        setPaymentType('full')
+                        setCardNumber('')
+                        setReferenceNumber('')
+                        // Reset to first payment method
+                        if (paymentMethods.length > 0) {
+                          setSelectedPaymentMethodId(paymentMethods[0].id)
+                        }
+                      }
+                    }
+                  }
+                ]
+              )
             }
           }
         ]

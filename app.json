@@ -3,7 +3,7 @@
     "name": "LaundroPOSMobile",
     "slug": "LaundroPOSMobile",
     "version": "1.1.0",
-    "runtimeVersion": "1.1.1",
+    "runtimeVersion": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -32,6 +32,11 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "INTERNET",
         "ACCESS_NETWORK_STATE"
       ],
       "edgeToEdgeEnabled": true,
@@ -55,6 +60,9 @@
         "projectId": "1343d135-4bd7-46cd-b8f1-77420c15b696"
       }
     },
-    "owner": "arkware"
+    "owner": "arkware",
+    "updates": {
+      "url": "https://u.expo.dev/1343d135-4bd7-46cd-b8f1-77420c15b696"
+    }
   }
 }

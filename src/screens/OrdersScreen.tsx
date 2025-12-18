@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../../lib/supabase'
 import { useStore } from '../context/StoreContext'
 import ThermalPrinterService from '../services/ThermalPrinterService'
+import SMSService from '../services/SMSService'
 import QRCodeDisplay from '../components/QRCodeDisplay'
 import QRScanner from '../components/QRScanner'
 import { useNotifications } from '../context/NotificationContext'
@@ -581,7 +582,63 @@ export default function OrdersScreen() {
 
       if (error) throw error
 
+      // Show success alert first
       Alert.alert('Success', `Order status updated to ${formatStatusText(newStatus)}`)
+
+      // If order is marked as ready, prompt to send SMS notification
+      if (newStatus === 'ready' && order.customers) {
+        const customerPhone = order.customers.phone
+        const customerFirstName = order.customers.first_name
+        const orderNumber = order.order_number
+        const storeName = currentStore.name
+
+        // Delay SMS prompt slightly to allow success alert to be seen
+        setTimeout(() => {
+          if (!customerPhone) {
+            Alert.alert(
+              'Phone Number Missing',
+              'Customer phone number is missing. SMS notification cannot be sent.',
+              [{ text: 'OK' }]
+            )
+          } else {
+            // Prompt user to confirm sending SMS
+            Alert.alert(
+              'Send Message for Pickup',
+              'Would you like to send an SMS notification to the customer?',
+              [
+                {
+                  text: 'Cancel',
+                  style: 'cancel',
+                },
+                {
+                  text: 'Send SMS',
+                  onPress: async () => {
+                    try {
+                      await SMSService.sendOrderCompletionSMS({
+                        phoneNumber: customerPhone,
+                        customerFirstName: customerFirstName,
+                        orderNumber: orderNumber,
+                        storeName: storeName,
+                        orderItems: order.order_items || [],
+                      })
+                      Alert.alert('Success', 'SMS notification sent successfully!')
+                      console.log('✅ SMS notification sent successfully')
+                    } catch (smsError: any) {
+                      console.error('❌ Error sending SMS:', smsError)
+                      Alert.alert(
+                        'SMS Error',
+                        `Failed to send SMS: ${smsError.message || 'Unknown error'}`,
+                        [{ text: 'OK' }]
+                      )
+                    }
+                  },
+                },
+              ]
+            )
+          }
+        }, 500)
+      }
+
       loadOrders()
       setShowOrderDetails(false)
     } catch (error: any) {
@@ -680,6 +737,64 @@ export default function OrdersScreen() {
       console.error('Error cancelling order:', error)
       Alert.alert('Error', `Failed to cancel order: ${error.message}`)
     }
+  }
+
+  const handleSendPickupSMS = async () => {
+    if (!selectedOrder || !currentStore) return
+
+    if (!selectedOrder.customers) {
+      Alert.alert('Error', 'Customer information not available')
+      return
+    }
+
+    const customerPhone = selectedOrder.customers.phone
+    const customerFirstName = selectedOrder.customers.first_name
+    const orderNumber = selectedOrder.order_number
+    const storeName = currentStore.name
+
+    if (!customerPhone) {
+      Alert.alert(
+        'Phone Number Missing',
+        'Customer phone number is missing. SMS notification cannot be sent.',
+        [{ text: 'OK' }]
+      )
+      return
+    }
+
+    // Prompt user to confirm sending SMS
+    Alert.alert(
+      'Send Message for Pickup',
+      'Would you like to send an SMS notification to the customer?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Send SMS',
+          onPress: async () => {
+            try {
+              await SMSService.sendOrderCompletionSMS({
+                phoneNumber: customerPhone,
+                customerFirstName: customerFirstName,
+                orderNumber: orderNumber,
+                storeName: storeName,
+                orderItems: selectedOrder.order_items || [],
+              })
+              Alert.alert('Success', 'SMS notification sent successfully!')
+              console.log('✅ SMS notification sent successfully')
+            } catch (smsError: any) {
+              console.error('❌ Error sending SMS:', smsError)
+              Alert.alert(
+                'SMS Error',
+                `Failed to send SMS: ${smsError.message || 'Unknown error'}`,
+                [{ text: 'OK' }]
+              )
+            }
+          },
+        },
+      ]
+    )
   }
 
   const handleAddPayment = async () => {
@@ -1233,6 +1348,17 @@ export default function OrdersScreen() {
                     </Text>
                   </TouchableOpacity>
                 </View>
+
+                {/* Send Message for Pickup Button - Only show when order is ready */}
+                {selectedOrder.order_status === 'ready' && (
+                  <TouchableOpacity
+                    style={styles.sendMessageButton}
+                    onPress={handleSendPickupSMS}
+                  >
+                    <Ionicons name="chatbubble-ellipses-outline" size={20} color="#ffffff" />
+                    <Text style={styles.sendMessageButtonText}>Send Message for Pickup</Text>
+                  </TouchableOpacity>
+                )}
 
                 {/* QR Code Display */}
                 {showQRCode && (
@@ -2059,6 +2185,22 @@ const styles = StyleSheet.create({
   printButtonText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  sendMessageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10b981',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginTop: 12,
+    gap: 8,
+  },
+  sendMessageButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
   },
   qrCodeContainer: {
     backgroundColor: '#ffffff',

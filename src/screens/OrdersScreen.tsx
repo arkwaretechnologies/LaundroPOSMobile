@@ -639,7 +639,8 @@ export default function OrdersScreen() {
         }, 500)
       }
 
-      loadOrders()
+      // Reload orders with pagination reset to show updated status
+      await loadOrders(true)
       setShowOrderDetails(false)
     } catch (error: any) {
       console.error('Error updating order status:', error)
@@ -870,7 +871,8 @@ export default function OrdersScreen() {
       if (paymentMethods.length > 0) {
         setSelectedPaymentMethodId(paymentMethods[0].id)
       }
-      loadOrders()
+      // Reload orders with pagination reset to show updated payment status
+      await loadOrders(true)
     } catch (error: any) {
       console.error('Error adding payment:', error)
       Alert.alert('Error', `Failed to record payment: ${error.message}`)

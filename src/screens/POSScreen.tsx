@@ -86,6 +86,8 @@ const POSScreen: React.FC = () => {
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null)
   const [cardNumber, setCardNumber] = useState('')
   const [referenceNumber, setReferenceNumber] = useState('')
+  const [paymentProcessing, setPaymentProcessing] = useState(false)
+  const [printingTicket, setPrintingTicket] = useState(false)
 
   // Load services and inventory from database
   useEffect(() => {
@@ -517,6 +519,7 @@ const POSScreen: React.FC = () => {
         return
       }
 
+    setPaymentProcessing(true)
     try {
       // Get current user
       const { data: { user } } = await supabase.auth.getUser()
@@ -616,6 +619,7 @@ const POSScreen: React.FC = () => {
         console.log('Payment recorded:', amountPaid)
       }
 
+      setPaymentProcessing(false)
       // Show success message first
       Alert.alert(
         'Order Created Successfully!', 
@@ -650,6 +654,7 @@ const POSScreen: React.FC = () => {
                   {
                     text: 'Print',
                     onPress: async () => {
+                      setPrintingTicket(true)
                       // Print claim ticket
                       try {
                         const customerName = selectedCustomer 
@@ -721,7 +726,7 @@ const POSScreen: React.FC = () => {
                         
                         if (printSuccess) {
                           console.log('✅ Claim ticket printed successfully')
-                          Alert.alert('Success', 'Claim ticket printed successfully!')
+                          // Exit after printing: close modal and reset (no success alert)
                         } else {
                           console.log('⚠️ Claim ticket printing failed or printer not available')
                           Alert.alert('Print Failed', 'Failed to print claim ticket. Please check your printer connection.')
@@ -730,7 +735,8 @@ const POSScreen: React.FC = () => {
                         console.error('❌ Error printing claim ticket:', printError)
                         Alert.alert('Print Error', `Failed to print claim ticket: ${printError.message || 'Unknown error'}`)
                       } finally {
-                        // Reset form after printing attempt
+                        setPrintingTicket(false)
+                        // Exit after printing: reset form and close payment modal
                         setCart([])
                         setSelectedCustomer(null)
                         setShowPaymentModal(false)
@@ -753,6 +759,7 @@ const POSScreen: React.FC = () => {
       )
     } catch (error: any) {
       console.error('Error processing payment:', error)
+      setPaymentProcessing(false)
       Alert.alert('Error', `Failed to process payment: ${error.message}`)
     }
   }
@@ -1187,11 +1194,16 @@ const POSScreen: React.FC = () => {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Payment Details</Text>
-              <TouchableOpacity onPress={() => {
-                setShowPaymentModal(false)
-                setCardNumber('')
-                setReferenceNumber('')
-              }}>
+              <TouchableOpacity
+                onPress={() => {
+                  if (paymentProcessing || printingTicket) return
+                  setShowPaymentModal(false)
+                  setCardNumber('')
+                  setReferenceNumber('')
+                }}
+                disabled={paymentProcessing || printingTicket}
+                style={{ opacity: (paymentProcessing || printingTicket) ? 0.5 : 1 }}
+              >
                 <Ionicons name="close" size={24} color="#6b7280" />
             </TouchableOpacity>
         </View>
@@ -1377,16 +1389,28 @@ const POSScreen: React.FC = () => {
                   setCardNumber('')
                   setReferenceNumber('')
                 }}
+                disabled={paymentProcessing}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
         </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.processButton}
+                style={[styles.processButton, paymentProcessing && styles.processButtonDisabled]}
                 onPress={processPayment}
+                disabled={paymentProcessing}
               >
                 <Text style={styles.processButtonText}>Process Payment</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Loading overlay while processing payment or printing ticket */}
+            {(paymentProcessing || printingTicket) && (
+              <View style={styles.paymentLoadingOverlay} pointerEvents="auto">
+                <ActivityIndicator size="large" color="#3b82f6" />
+                <Text style={styles.paymentLoadingText}>
+                  {printingTicket ? 'Printing ticket...' : 'Processing payment...'}
+                </Text>
+              </View>
+            )}
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -1928,6 +1952,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#ffffff',
     fontWeight: '600',
+  },
+  processButtonDisabled: {
+    opacity: 0.7,
+  },
+  paymentLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 16,
+  },
+  paymentLoadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#374151',
+    fontWeight: '500',
   },
   // Customer section styles
   customerSection: {

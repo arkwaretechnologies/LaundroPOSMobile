@@ -1,5 +1,7 @@
 import SendSMS from 'react-native-sms'
 
+type SMSCallbackError = unknown
+
 interface OrderItem {
   service_name: string
   quantity: number
@@ -42,20 +44,32 @@ class SMSService {
     }
 
     // Format the message according to specification
-    const message = `Good day ${customerFirstName}, your order #${orderNumber} is ready for pickup.${itemsList}\n\nThank you! - ${storeName}`
+    const message = `Good day ${customerFirstName}, your laundry #${orderNumber} is ready for pickup.${itemsList}\n\nThank you! - ${storeName}`
 
     return new Promise((resolve, reject) => {
       SendSMS.send(
         {
           body: message,
           recipients: [phoneNumber],
-          successTypes: ['sent', 'queued'],
+          successTypes: ['sent', 'queued'] as any,
           allowAndroidSendWithoutReadPermission: true,
         },
-        (completed, cancelled, error) => {
+        (completed, cancelled, error: SMSCallbackError) => {
           if (error) {
             console.error('❌ SMS sending error:', error)
-            reject(new Error(error || 'Failed to send SMS'))
+            const errorMessage =
+              typeof error === 'string'
+                ? error
+                : error && typeof error === 'object' && 'message' in (error as any)
+                  ? String((error as any).message)
+                  : (() => {
+                      try {
+                        return JSON.stringify(error)
+                      } catch {
+                        return String(error)
+                      }
+                    })()
+            reject(new Error(errorMessage || 'Failed to send SMS'))
             return
           }
 
